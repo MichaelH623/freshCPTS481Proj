@@ -216,40 +216,51 @@ impl RecoveryMetadata {
     }
 }
 
-/// Session information stored in the lock file
-///
-/// This is used to detect crashes - if the lock file exists but
-/// the process is not running, we know the editor crashed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionInfo {
+#[derive(Debug,Clone,Serialize,Deserialize)]
+pub struct SessionInfo
+{
     /// Process ID of the editor
     pub pid: u32,
 
-    /// Unix timestamp when the session started
     pub started_at: u64,
-
-    /// Working directory
+    /// Working the directory
     pub working_dir: Option<PathBuf>,
+
+    #[serde(default)]
+    pub last_heartbeat: u64,
+
+}
+// Current Unic time in seconds 0 if the clock is before 1970
+fn unix_now() -> u64
+{
+    SystemTime::now()
+    .duration_since(SystemTime::UNIX_EPOCH)
+    .map(|d| d.as_secs())
+    .unwrap_or(0)
 }
 
-impl SessionInfo {
-    /// Create new session info for the current process
-    pub fn new() -> Self {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+impl SessionInfo
+{
+    pub fn new() -> Self
+    {
+        let now = unix_now();
 
-        Self {
-            pid: std::process::id(),
+        Self
+        {
+            pid : std::process::id(),
             started_at: now,
             working_dir: std::env::current_dir().ok(),
+            last_heartbeat: now,
         }
     }
-
-    /// Check if this session is still running
-    pub fn is_running(&self) -> bool {
+    pub fn is_running(&self) -> bool
+    {
         is_process_running(self.pid)
+    }
+
+    pub fn touch(&mut self)
+    {
+        self.last_heartbeat = unix_now();
     }
 }
 
