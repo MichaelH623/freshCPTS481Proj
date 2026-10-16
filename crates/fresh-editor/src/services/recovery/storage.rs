@@ -158,17 +158,24 @@ impl RecoveryStorage {
         Ok(info)
     }
 
-    /// Update the session lock timestamp (heartbeat)
-    pub fn update_session_lock(&self) -> io::Result<()> {
+    pub fn update_session_lock(&self) -> io::Result<()>
+    {
         let path = self.session_lock_path();
-        if path.exists() {
-            // Just update the file's mtime by rewriting it
-            let info = SessionInfo::new();
+        if path.exists()
+        {
+            let mut info = match self.read_session_lock(){
+                Ok(Some(info)) if info.pid == std::process::id() => info,
+                _=> SessionInfo::new(),
+            };
+            info.touch();
             let json = serde_json::to_string_pretty(&info).map_err(io::Error::other)?;
-            self.atomic_write(&path, json.as_bytes())?;
+            self.atomic_write(&path,json.as_bytes())?;
         }
         Ok(())
     }
+
+
+
 
     /// Remove the session lock file (clean shutdown)
     pub fn remove_session_lock(&self) -> io::Result<()> {
