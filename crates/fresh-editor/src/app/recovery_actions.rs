@@ -667,6 +667,10 @@ impl Editor {
         for window in self.windows.values_mut() {
             window.last_auto_recovery_save = now;
         }
+        if let Err(e) = self.recovery_service.lock().unwrap().heartbeat()
+        {
+            tracing::warn!("failed to refrsh the session lock{e}");
+        }
         Ok(saved)
     }
 
