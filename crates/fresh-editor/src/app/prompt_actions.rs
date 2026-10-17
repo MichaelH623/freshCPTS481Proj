@@ -741,6 +741,47 @@ impl Editor {
                         .resolve_callback(callback_id, json);
                 }
             }
+            PromptType::TabRename { original_path } => {
+                let new_name = input.trim().to_string();
+                let Some(old_name) = original_path.file_name().map(|n| n.to_string_lossy().to_string()) else {
+                    return;
+                };
+
+                if new_name.is_empty() || new_name == old_name {
+                    self.set_status_message(t!("explorer.rename_cancelled").to_string());
+                    return;
+                }
+
+                let Some(parent) = original_path.parent().map(|p| p.to_path_buf()) else {
+                    return;
+                };
+
+                // Use the existing path validation helper to ensure the name is valid and doesn't conflict
+                let Some(new_path) = self.entry_path_for_name(&parent, &new_name, Some(&original_path)) else {
+                    return;
+                };
+
+                let fs = std::sync::Arc::clone(&self.authority().filesystem);
+                
+                // Perform the filesystem rename
+                let result = new_path.parent()
+                    .map_or(Ok(()), |p| fs.create_dir_all(p))
+                    .and_then(|()| fs.rename(&original_path, &new_path));
+
+                if let Err(e) = result {
+                    self.set_status_message(format!("Failed to rename file: {}", e));
+                    return;
+                }
+
+                //  Re-point any open buffers pointing to the old path to the new path 
+                self.relocate_buffers_for_rename(&original_path, &new_path);
+
+                // Refresh the file explorer tree so the sidebar reflects the new filename
+                let moved = new_path.parent() != Some(parent.as_path());
+                self.refresh_tree_after_paste(&original_path, &new_path, moved);
+
+                self.set_status_message(format!("Renamed '{}' to '{}'", old_name, new_name));
+            }
         }
         PromptResult::Done
     }

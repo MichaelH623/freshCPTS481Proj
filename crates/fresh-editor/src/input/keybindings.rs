@@ -892,6 +892,9 @@ pub enum Action {
     WorkspaceTrustBlock,    // Block: no process execution at all
     WorkspaceTrustPrompt,   // Open the workspace-trust dialog to change the level
 
+    // added to rename files
+    PaneTabRename,
+
     // No-op
     None,
 }

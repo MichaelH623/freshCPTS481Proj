@@ -114,6 +114,8 @@ pub enum TabContextMenuItem {
     /// Move the tab into its own new orchestrator workspace over the same
     /// project root (a co-tenant window)
     ExtractToNewWorkspace,
+    // Added so files can be easily renamed
+    Rename,
 }
 
 impl TabContextMenuItem {
@@ -130,6 +132,7 @@ impl TabContextMenuItem {
             Self::CopyRelativePath,
             Self::CopyFullPath,
             Self::ExtractToNewWorkspace,
+            Self::Rename,
         ]
     }
 
@@ -144,6 +147,7 @@ impl TabContextMenuItem {
             Self::CopyRelativePath => t!("tab.copy_relative_path").to_string(),
             Self::CopyFullPath => t!("tab.copy_full_path").to_string(),
             Self::ExtractToNewWorkspace => t!("tab.extract_to_new_workspace").to_string(),
+            Self::Rename => t!("tab.rename").to_string(), //placeholder should work
         }
     }
 }

@@ -212,6 +212,10 @@ pub enum PromptType {
     /// Async prompt from plugin (for editor.prompt() API)
     /// The result is returned via callback resolution
     AsyncPrompt,
+    // added to rename files
+    TabRename {
+        original_path: std::path::PathBuf,
+    },
 }
 
 impl PromptType {

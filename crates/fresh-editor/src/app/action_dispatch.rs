@@ -1925,6 +1925,32 @@ impl Editor {
             Action::PromptSelectWordRight => {
                 self.dispatch_prompt_key_for_action(KeyCode::Right, KM::CONTROL | KM::SHIFT)
             }
+            Action::PaneTabRename => {
+                // Ensure active buffer has an actual file path on disk
+                // otherwise I think corruption?
+                let Some(path) = self.active_state().buffer.file_path().map(|p| p.to_path_buf()) else {
+                    self.set_status_message("Cannot rename an unsaved buffer".to_string());
+                    return Ok(());
+                };
+                
+                // exits if no named in buffer
+                if path.as_os_str().is_empty() {
+                    self.set_status_message("Cannot rename an unnamed buffer".to_string());
+                    return Ok(());
+                }
+
+                let old_name = path.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+
+                // Open prompt pre-filled with the current file name
+                let prompt = crate::view::prompt::Prompt::with_initial_text_for_edit(
+                    t!("tab.rename_prompt").into_owned(),
+                    PromptType::TabRename { original_path: path },
+                    old_name,
+                );
+                self.set_prompt(prompt);
+            }
             _ => {
                 // TODO: Why do we have this catch-all? It seems like actions should either:
                 // 1. Be handled explicitly above (like InsertChar, PopupConfirm, etc.)
