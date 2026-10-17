@@ -262,6 +262,11 @@ impl SessionInfo
     {
         self.last_heartbeat = unix_now();
     }
+
+    pub fn is_heartbeat_stale(&self,max_age_secs: u64) -> bool
+    {
+        self.last_heartbeat != 0 && unix_now().saturating_sub(self.last_heartbeat) > max_age_secs
+    }
 }
 
 impl Default for SessionInfo {
@@ -575,6 +580,46 @@ mod tests {
         let info = SessionInfo::new();
         assert_eq!(info.pid, std::process::id());
         assert!(info.started_at > 0);
+    }
+
+    #[test]
+    fn test_session_info_new_with_fresh_heartbelts()
+    {
+        let info = SessionInfo::new();
+        assert_eq!(info.last_heartbeat,info.started_at);
+        assert!(!info.is_heartbeat_stale(60));
+
+    }
+
+    #[test]
+    fn test_touch_updates_heartbeat_but_keeps_started_at()
+    {
+        let mut info = SessionInfo::new();
+        info.started_at = 1;
+        info.last_heartbeat = 1; 
+        info.touch();
+        assert_eq!(info.started_at,1,"touch must not reset the session start time");
+        assert!(info.last_heartbeat > 1);
+    }
+
+    #[test]
+
+    fn test_old_heartbeat_is_stale()
+    {
+        let mut info = SessionInfo::new();
+        info.last_heartbeat = unix_now() - 120;
+        assert!(info.is_heartbeat_stale(60));
+        assert!(!info.is_heartbeat_stale(600));
+    }
+
+    #[test]
+
+    fn test_lock_from_older_version_is_never_stale()
+    {
+        let json = r#"{"pid": 1,"started_at":1,"working_dir":null}"#;
+        let info: SessionInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.last_heartbeat,0);
+        assert!(!info.is_heartbeat_stale(0));
     }
 
     #[test]

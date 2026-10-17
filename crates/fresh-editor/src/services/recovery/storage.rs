@@ -199,10 +199,12 @@ impl RecoveryStorage {
         Ok(Some(info))
     }
 
+    const STALE_HEARTBEAT_SECS: u64 = 60 * 60;
+
     /// Check if there was a crash (lock file exists but process not running)
     pub fn detect_crash(&self) -> io::Result<bool> {
         match self.read_session_lock()? {
-            Some(info) => Ok(!info.is_running()),
+            Some(info) => Ok(!info.is_running() || info.is_heartbeat_stale(Self::STALE_HEARTBEAT_SECS)),
             None => Ok(false),
         }
     }
