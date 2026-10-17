@@ -3987,7 +3987,8 @@ pub fn action_to_events(
         | Action::WorkspaceTrustTrust
         | Action::WorkspaceTrustRestrict
         | Action::WorkspaceTrustBlock
-        | Action::WorkspaceTrustPrompt => return None,
+        | Action::WorkspaceTrustPrompt
+        | Action::PaneTabRename => return None,
 
         // Block/rectangular selection actions
         Action::BlockSelectLeft => {

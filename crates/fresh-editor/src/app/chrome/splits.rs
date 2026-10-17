@@ -991,6 +991,9 @@ impl Editor {
             TabContextMenuItem::ExtractToNewWorkspace => {
                 self.extract_tab_to_new_workspace(buffer_id);
             }
+            TabContextMenuItem::Rename => {
+                self.file_explorer_rename();
+            }
         }
 
         Ok(())
