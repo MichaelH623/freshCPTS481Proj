@@ -725,6 +725,47 @@ mod tests {
         assert!(storage.read_session_lock().unwrap().is_none());
     }
 
+    fn write_lock(storage: &RecoveryStorage, info: &SessionInfo)
+    {
+        let json = serde_json::to_string_pretty(info).unwrap();
+        storage.atomic_write(&storage.session_lock_path(), json.as_bytes()).unwrap();
+
+    }
+
+    #[test]
+    fn test_detect_crash_false_for_live_session_with_fresh_heartbeat()
+    {
+        let (storage, _temp) = create_test_storage();
+        storage.create_session_lock().unwrap();
+        assert!(!storage.detect_crash().unwrap());
+    }
+
+    #[test]
+    fn test_detect_crash_true_for_live_for_pid_with_stale_heart()
+    {
+
+        let (storage, _temp) = create_test_storage();
+        let mut info = storage.create_session_lock().unwrap();
+        info.last_heartbeat = 1;
+        write_lock(&storage,&info);
+        assert!(storage.detect_crash().unwrap());
+    }
+
+    #[test]
+    fn test_update_session_lock_keeps_started_at_and_refrshes_heartbeat()
+    {
+        let (storage, _temp) = create_test_storage();
+        let mut info = storage.create_session_lock().unwrap();
+        info.started_at = 1;
+        info.last_heartbeat = 1;
+        write_lock(&storage,&info);
+        storage.update_session_lock().unwrap();
+
+        let updated = storage.read_session_lock().unwrap().unwrap();
+        assert_eq!(updated.started_at,1, "Heartbeat must not reset started_at");
+        assert!(updated.last_heartbeat > 1, "Heartbeat must not reset last_at");
+    }
+
     #[test]
     fn test_save_and_load_recovery() {
         let (storage, _temp) = create_test_storage();
