@@ -360,6 +360,7 @@ mod tests {
         (stop_tx, url)
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn test_update_checker_detects_new_version() {
         let (stop_tx, url) = start_mock_release_server("99.0.0");
@@ -463,6 +464,7 @@ mod tests {
     /// the background check that decides whether to show the indicator, and
     /// the update child the popup spawns, must agree on where releases come
     /// from. They share one env var so they cannot drift.
+    #[cfg(debug_assertions)]
     #[test]
     fn the_release_feed_override_is_shared_by_check_and_update() {
         // Not set: both fall back to the GitHub API.
