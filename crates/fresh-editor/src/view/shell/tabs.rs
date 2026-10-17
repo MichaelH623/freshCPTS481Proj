@@ -273,6 +273,10 @@ fn name_node(pane: LeafId, t: TabTarget, s: String, ink: String) -> Node<UiMsg> 
                             y,
                         }))
                     }
+                    MouseButton::Middle => {
+                        e.stop();
+                        Some(UiMsg::Ui(UiFact::PaneTabClose { pane, target: t }))
+                    }
                     _ => None,
                 }
             }),
@@ -1069,5 +1073,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn middle_clicking_a_tab_closes_it() {
+        // this sets up a mock enviroment
+        let mut ui = laid_out(strip_of(2), PaneControls::default(), 80);
+        // this grabs the cordinates of the tab
+        let n1 = rect(&ui, tab_key(pane(), buf(1)));
+        let at = Point::new(n1.x + 2, n1.y);
+        // simulates the middle click
+        let got = facts(ui.dispatch(Input::press(at, MouseButton::Middle, Mods::NONE)));
+        assert_eq!(
+            got,
+            vec![UiFact::PaneTabClose {
+                pane: pane(),
+                target: buf(1)
+            }]
+        );
     }
 }
