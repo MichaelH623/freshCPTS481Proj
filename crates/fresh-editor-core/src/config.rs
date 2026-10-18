@@ -1569,6 +1569,19 @@ pub struct EditorConfig {
     #[schemars(extend("x-section" = "Startup"))]
     pub auto_create_empty_buffer_on_last_buffer_close: bool,
 
+
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-section" = "Startup"))]
+    pub auto_create_empty_buffer_on_launch: bool,
+
+    #[serde(default)]
+    #[schemars(extend("x-section" = "Startup"))]
+    pub auto_create_empty_buffer_on_launch_with_directory: bool,
+
+    #[serde(default)]
+    #[schemars(extend("x-section" = "Startup"))]
+    pub auto_create_empty_buffer_on_launch_with_file: bool,
+
     // ===== Recovery =====
     /// Periodically save changes to recovery files, so work survives a crash.
     #[serde(default = "default_true")]
@@ -1713,7 +1726,7 @@ fn default_estimated_line_length() -> usize {
 }
 
 fn default_auto_save_interval() -> u32 {
-    30 // 30 seconds between persistent auto-saves
+    30 // 30 seconds between persistent auto-saves 
 }
 
 fn default_auto_recovery_save_interval() -> u32 {
@@ -1794,6 +1807,9 @@ impl Default for EditorConfig {
             skip_session_restore_when_files_passed: true,
             ephemeral_file_patterns: default_ephemeral_file_patterns(),
             auto_create_empty_buffer_on_last_buffer_close: true,
+            auto_create_empty_buffer_on_launch: true,
+            auto_create_empty_buffer_on_launch_with_directory: false,
+            auto_create_empty_buffer_on_launch_with_file:false,
             recovery_enabled: true,
             auto_recovery_save_interval_secs: default_auto_recovery_save_interval(),
             highlight_context_bytes: default_highlight_context_bytes(),
