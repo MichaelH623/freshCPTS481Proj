@@ -278,6 +278,7 @@ use std::time::Instant;
 
 // Re-export BufferId from event module for backward compatibility
 pub use self::types::{BufferKind, BufferMetadata, HoverTarget};
+pub use buffer_management::StartupLaunch;
 pub use self::warning_domains::{
     GeneralWarningDomain, LspWarningDomain, WarningDomain, WarningDomainRegistry, WarningLevel,
 };

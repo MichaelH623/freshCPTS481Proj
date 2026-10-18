@@ -840,4 +840,74 @@ impl Editor {
         }
         false
     }
+
 }
+
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub enum StartupLaunch
+{
+    NoPath,
+    Directory,
+    File,
+}
+
+impl StartupLaunch
+{
+    pub fn from_paths<'a>(paths: impl IntoIterator<Item = &'a std::path::Path>) -> Self
+    {
+        let mut saw_dir = false;
+        for path in paths
+        {
+            if !path.is_dir()
+            {
+                return StartupLaunch::File;
+            }
+            saw_dir = true;
+        }
+
+        if saw_dir
+        {
+            StartupLaunch:: Directory
+        }
+        else 
+        {
+            StartupLaunch::NoPath
+        }
+    }
+
+    pub fn wants_empty_buffer(self,editor: &crate::config::EditorConfig) -> bool
+    {
+        match self
+        {
+            StartupLaunch::NoPath => editor.auto_create_empty_buffer_on_launch,
+            StartupLaunch::Directory => editor.auto_create_empty_buffer_on_launch_with_directory,
+            StartupLaunch::File => editor.auto_create_empty_buffer_on_launch_with_file,
+        }
+    }
+}
+
+
+impl Editor
+{
+    pub fn apply_startup_empty_buffer_policy(&mut self, launch: StartupLaunch)
+    {
+        let wants_empty = launch.wants_empty_buffer(&self.config.editor);
+        let active = self.active_buffer();
+        let pristine = self.active_window().is_pristine_scratch(active);
+
+
+        if !wants_empty && pristine
+        {
+            if let Some(meta) = self.active_window_mut().buffer_metadata.get_mut(&active)
+            {
+                meta.hidden_from_tabs = true;
+                meta.synthetic_placeholder = true;
+            }
+        } else if wants_empty && launch == StartupLaunch::File && !pristine
+        {
+            let _ = self.new_buffer();
+        }
+    }
+}
+
+

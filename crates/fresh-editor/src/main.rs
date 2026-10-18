@@ -6506,6 +6506,8 @@ fn real_main() -> AnyhowResult<()> {
         // would race the file in and open on top of it.
         editor.process_pending_file_opens();
 
+        editor.apply_startup_empty_buffer_policy(fresh::app::StartupLaunch::from_paths(file_locations.iter().map(|loc|loc.path.as_path())));
+
         // Workspace restored, initial buffers opened, recovery session up —
         // fire the `ready` lifecycle hook (design M2, §3.3 phase 3) before
         // handing off to the event loop.
