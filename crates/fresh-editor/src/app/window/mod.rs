@@ -343,6 +343,11 @@ pub struct Window {
     /// not overwrite it. Both look identical without this.
     pub workspace_restored: bool,
 
+    /// Saved tabs whose file exists on disk but is failing to open during
+    /// a workspace restore this should write back on save so a transient open failure
+    /// doesn't erase the tab from the saved layout added for issue [#3532].
+    pub(crate) held_tabs: Vec<crate::app::workspace::HeldTab>,
+
     /// Canonical absolute path of the project root. Read-only after
     /// construction; closing a window and creating a new one is the
     /// way to "rename" the root.
@@ -2419,6 +2424,8 @@ impl Window {
             // user left hours ago.
             last_focused_at: crate::workspace::now_millis(),
             workspace_restored: false,
+            // added for issye 3532
+            held_tabs: Vec::new(),
             root,
             unresolved_unnamed_buffers: Vec::new(),
             recovery_notices: Vec::new(),

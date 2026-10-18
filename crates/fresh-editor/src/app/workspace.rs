@@ -46,6 +46,58 @@ use super::Editor;
 /// The prompt histories kept in the global `<data_dir>/<name>_history.json`
 /// files: loaded into the active window at startup, saved on exit.
 pub(super) const GLOBAL_PROMPT_HISTORIES: [&str; 3] = ["search", "replace", "goto_line"];
+// Added for issue 3532
+// A saved tab whose file exists on disk but failed to open during restore.
+#[derive(Debug, Clone)]
+pub(crate) struct HeldTab {
+    // Split the tab belonged to (this session's id).
+    pub(crate) split: usize,
+    // Slot in that split's tab strip.
+    pub(crate) index: usize,
+    // Path as the tab stored it (relative to root, or absolute).
+    pub(crate) path: PathBuf,
+    // Saved cursor/scroll state for the file, if any.
+    pub(crate) state: Option<SerializedFileState>,
+}
+
+// Put held tabs back into a freshly serialized split state. Tabs whose file has since vanished are dropped or the tabs already open aren't duplicated.
+fn reinsert_held_tabs(
+    state: &mut SerializedSplitViewState,
+    held: &[&HeldTab],
+    path_exists: impl Fn(&Path) -> bool,
+) {
+    for tab in held {
+        if !path_exists(&tab.path) {
+            continue;
+        }
+        let already_open = state
+            .open_tabs
+            .iter()
+            .any(|t| matches!(t, SerializedTabRef::File(p) if *p == tab.path));
+        if already_open {
+            continue;
+        }
+        let at = tab.index.min(state.open_tabs.len());
+        state
+            .open_tabs
+            .insert(at, SerializedTabRef::File(tab.path.clone()));
+        if let Some(active) = state.active_tab_index.as_mut() {
+            if *active >= at {
+                *active += 1;
+            }
+        }
+        if tab.path.is_relative() && !state.open_files.contains(&tab.path) {
+            state.open_files.push(tab.path.clone());
+        }
+        if let Some(fs) = &tab.state {
+            state
+                .file_states
+                .entry(tab.path.clone())
+                .or_insert_with(|| fs.clone());
+        }
+    }
+}
+
 
 /// The on-disk workspace a window with this `root` and durable id restores
 /// from — the one lookup both restore and the unrestored-save history merge
@@ -1585,6 +1637,32 @@ impl crate::app::window::Window {
             return;
         };
         let ephemeral_patterns = self.config().editor.ephemeral_file_patterns.clone();
+
+        // added for issue 3532
+        // Tabs whose file exists but didn't open so I hold them so the next save doesn't erase them.
+        // A path that doesn't exist is gone and is not held or worried about.
+        let split_key = current_split_id.0 .0;
+        let held: Vec<HeldTab> = split_state
+            .open_tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tab)| match tab {
+                SerializedTabRef::File(path)
+                    if !path_to_buffer.contains_key(path)
+                        && self.root.join(path).exists() =>
+                {
+                    Some(HeldTab {
+                        split: split_key,
+                        index,
+                        path: path.clone(),
+                        state: split_state.file_states.get(path).cloned(),
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        self.held_tabs.retain(|h| h.split != split_key);
+        self.held_tabs.extend(held);
 
         // …then the defaults for every buffer the restore could seed a view
         // state for here, resolved up front because the wrap resolvers need
@@ -3166,7 +3244,7 @@ impl crate::app::window::Window {
         let mut split_states = HashMap::new();
         for (leaf_id, view_state) in view_states {
             let active_buffer = active_buffers.get(leaf_id).copied();
-            let serialized = serialize_split_view_state(
+            let mut serialized = serialize_split_view_state(
                 view_state,
                 self.buffers.as_map(),
                 &self.buffer_metadata,
@@ -3176,6 +3254,13 @@ impl crate::app::window::Window {
                 &terminal_indices,
                 &self.config().editor.ephemeral_file_patterns,
             );
+            // modifed to account for issue/bug 3532 
+            let held_here: Vec<&HeldTab> = self
+                .held_tabs
+                .iter()
+                .filter(|h| h.split == leaf_id.0 .0)
+                .collect();
+            reinsert_held_tabs(&mut serialized, &held_here, |p| self.root.join(p).exists());
             split_states.insert(leaf_id.0 .0, serialized);
         }
 
@@ -3806,4 +3891,58 @@ fn get_expanded_dirs(
     }
 
     expanded
+}
+
+#[cfg(test)]
+mod held_tab_tests {
+    use super::*;
+
+    fn state(tabs: &[&str], active: Option<usize>) -> SerializedSplitViewState {
+        SerializedSplitViewState {
+            open_tabs: tabs
+                .iter()
+                .map(|t| SerializedTabRef::File(PathBuf::from(*t)))
+                .collect(),
+            active_tab_index: active,
+            open_files: tabs.iter().map(|t| PathBuf::from(*t)).collect(),
+            active_file_index: 0,
+            file_states: HashMap::new(),
+        }
+    }
+
+    fn held(index: usize, path: &str) -> HeldTab {
+        HeldTab { split: 1, index, path: PathBuf::from(path), state: None }
+    }
+
+    fn names(s: &SerializedSplitViewState) -> Vec<String> {
+        s.open_tabs
+            .iter()
+            .filter_map(|t| match t {
+                SerializedTabRef::File(p) => Some(p.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn held_tab_returns_to_its_slot() {
+        let mut s = state(&["a.txt", "c.txt"], Some(1));
+        reinsert_held_tabs(&mut s, &[&held(1, "b.txt")], |_| true);
+        assert_eq!(names(&s), ["a.txt", "b.txt", "c.txt"]);
+        assert_eq!(s.active_tab_index, Some(2)); // still on c.txt
+    }
+
+    #[test]
+    fn vanished_file_is_not_held() {
+        let mut s = state(&["a.txt"], Some(0));
+        reinsert_held_tabs(&mut s, &[&held(1, "gone.txt")], |_| false);
+        assert_eq!(names(&s), ["a.txt"]);
+    }
+
+    #[test]
+    fn already_open_tab_is_not_duplicated() {
+        let mut s = state(&["a.txt", "b.txt"], Some(0));
+        reinsert_held_tabs(&mut s, &[&held(1, "b.txt")], |_| true);
+        assert_eq!(names(&s), ["a.txt", "b.txt"]);
+    }
 }

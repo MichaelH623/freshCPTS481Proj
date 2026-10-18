@@ -1349,6 +1349,8 @@ impl Action {
             "workspace_trust_block" => WorkspaceTrustBlock,
             "workspace_trust_prompt" => WorkspaceTrustPrompt,
 
+            "pane_tab_rename" => PaneTabRename,
+
             "noop" => None,
 
             "open_settings" => OpenSettings,
@@ -3258,6 +3260,7 @@ impl KeybindingResolver {
             Action::FileExplorerNewDirectory => t!("action.file_explorer_new_directory"),
             Action::FileExplorerDelete => t!("action.file_explorer_delete"),
             Action::FileExplorerRename => t!("action.file_explorer_rename"),
+            Action::PaneTabRename => "Rename Tab".into(),
             Action::FileExplorerToggleHidden => t!("action.file_explorer_toggle_hidden"),
             Action::FileExplorerToggleGitignored => t!("action.file_explorer_toggle_gitignored"),
             Action::FileExplorerSearchClear => t!("action.file_explorer_search_clear"),
