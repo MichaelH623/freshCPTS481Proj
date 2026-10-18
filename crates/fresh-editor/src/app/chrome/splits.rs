@@ -19,6 +19,7 @@ use crate::app::types::{HoverTarget, PointerDrag, SelectionDrag, TabContextMenu}
 use crate::app::BufferId;
 use crate::input::keybindings::Action;
 use crate::model::event::{CursorId, LeafId, SplitDirection};
+use crate::view::prompt::PromptType;
 use anyhow::Result as AnyhowResult;
 use fresh_i18n::t;
 
@@ -992,11 +993,35 @@ impl Editor {
                 self.extract_tab_to_new_workspace(buffer_id);
             }
             TabContextMenuItem::Rename => {
-                self.file_explorer_rename();
+                self.start_tab_rename(buffer_id);
             }
         }
 
         Ok(())
+    }
+
+    // Open the rename prompt for the file behind `buffer_id`.
+    pub(crate) fn start_tab_rename(&mut self, buffer_id: BufferId) {
+        let path: Option<std::path::PathBuf> = self
+            .buffers()
+            .get(&buffer_id)
+            .and_then(|state| state.buffer.file_path().map(|p| p.to_path_buf()));
+
+        let Some(path) = path.filter(|p| !p.as_os_str().is_empty()) else {
+            self.set_status_message(t!("tab.rename_no_file").to_string());
+            return;
+        };
+        let old_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        let prompt = crate::view::prompt::Prompt::with_initial_text_for_edit(
+            t!("tab.rename_prompt").into_owned(),
+            PromptType::TabRename { original_path: path },
+            old_name,
+        );
+        self.set_prompt(prompt);
     }
 
     /// Execute a close-split confirmation choice. "Cancel" is a no-op (the menu
