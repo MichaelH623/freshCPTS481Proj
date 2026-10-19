@@ -652,7 +652,7 @@ impl Merge for PartialLanguageConfig {
             .merge_from(&other.show_whitespace_tabs);
         self.line_wrap.merge_from(&other.line_wrap);
         self.wrap_column.merge_from(&other.wrap_column);
-        self.page_view.merge_from(&other.page_view); 
+        self.page_view.merge_from(&other.page_view);
         self.page_width.merge_from(&other.page_width);
         self.use_tabs.merge_from(&other.use_tabs);
         self.tab_size.merge_from(&other.tab_size);
@@ -708,10 +708,16 @@ impl From<&crate::config::EditorConfig> for PartialEditorConfig {
                 cfg.skip_session_restore_when_files_passed,
             ),
             ephemeral_file_patterns: Some(cfg.ephemeral_file_patterns.clone()),
-            auto_create_empty_buffer_on_last_buffer_close: Some(cfg.auto_create_empty_buffer_on_last_buffer_close,),
-            auto_create_empty_buffer_on_launch: Some(cfg.auto_create_empty_buffer_on_launch,),
-            auto_create_empty_buffer_on_launch_with_directory: Some(cfg.auto_create_empty_buffer_on_launch_with_directory,),
-            auto_create_empty_buffer_on_launch_with_file: Some(cfg.auto_create_empty_buffer_on_launch_with_file,),
+            auto_create_empty_buffer_on_last_buffer_close: Some(
+                cfg.auto_create_empty_buffer_on_last_buffer_close,
+            ),
+            auto_create_empty_buffer_on_launch: Some(cfg.auto_create_empty_buffer_on_launch),
+            auto_create_empty_buffer_on_launch_with_directory: Some(
+                cfg.auto_create_empty_buffer_on_launch_with_directory,
+            ),
+            auto_create_empty_buffer_on_launch_with_file: Some(
+                cfg.auto_create_empty_buffer_on_launch_with_file,
+            ),
             highlight_context_bytes: Some(cfg.highlight_context_bytes),
             mouse_wheel_scroll_lines: Some(cfg.mouse_wheel_scroll_lines),
             smooth_scroll: Some(cfg.smooth_scroll),
@@ -846,10 +852,10 @@ impl PartialEditorConfig {
                 .skip_session_restore_when_files_passed
                 .unwrap_or(defaults.skip_session_restore_when_files_passed),
             ephemeral_file_patterns: self
-                .ephemeral_file_patterns 
+                .ephemeral_file_patterns
                 .unwrap_or_else(|| defaults.ephemeral_file_patterns.clone()),
 
-            auto_create_empty_buffer_on_last_buffer_close: self 
+            auto_create_empty_buffer_on_last_buffer_close: self
                 .auto_create_empty_buffer_on_last_buffer_close
                 .unwrap_or(defaults.auto_create_empty_buffer_on_last_buffer_close),
             auto_create_empty_buffer_on_launch: self
@@ -861,7 +867,6 @@ impl PartialEditorConfig {
             auto_create_empty_buffer_on_launch_with_file: self
                 .auto_create_empty_buffer_on_launch_with_file
                 .unwrap_or(defaults.auto_create_empty_buffer_on_launch_with_file),
-
 
             highlight_context_bytes: self
                 .highlight_context_bytes

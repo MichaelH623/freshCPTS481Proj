@@ -1050,8 +1050,7 @@ fn test_close_last_buffer_blank_workspace_when_both_disabled() {
 }
 
 #[test]
-fn test_startup_policy_hides_empty_tab_when_disabled()
-{
+fn test_startup_policy_hides_empty_tab_when_disabled() {
     let mut config = Config::default();
 
     config.editor.auto_create_empty_buffer_on_launch = false;
@@ -1059,17 +1058,20 @@ fn test_startup_policy_hides_empty_tab_when_disabled()
     let mut harness = isolated_project_harness(config);
 
     harness
-    .editor_mut()
-    .apply_startup_empty_buffer_policy(fresh::app::StartupLaunch::NoPath);
+        .editor_mut()
+        .apply_startup_empty_buffer_policy(fresh::app::StartupLaunch::NoPath);
     harness.render().unwrap();
 
     let tab_bar = harness.screen_row_text(TAB_BAR_ROW);
-    assert!(!tab_bar.contains("[No Name]"), "Expacted no '[No Name]' tab. Tab bar: \n{}",tab_bar);
+    assert!(
+        !tab_bar.contains("[No Name]"),
+        "Expacted no '[No Name]' tab. Tab bar: \n{}",
+        tab_bar
+    );
 }
 
 #[test]
-fn test_startup_policy_keeps_empty_tab_by_default()
-{
+fn test_startup_policy_keeps_empty_tab_by_default() {
     let mut harness = isolated_project_harness(Config::default());
 
     harness
@@ -1078,12 +1080,15 @@ fn test_startup_policy_keeps_empty_tab_by_default()
     harness.render().unwrap();
 
     let tab_bar = harness.screen_row_text(TAB_BAR_ROW);
-    assert!(tab_bar.contains("[No Name]"), "Expected a '[No Name]' tab/ Tab bar:\n{}",tab_bar);
+    assert!(
+        tab_bar.contains("[No Name]"),
+        "Expected a '[No Name]' tab/ Tab bar:\n{}",
+        tab_bar
+    );
 }
 
 #[test]
-fn test_startup_policy_file_opened_later_gets_visable_tab()
-{
+fn test_startup_policy_file_opened_later_gets_visable_tab() {
     let mut config = Config::default();
     config.editor.auto_create_empty_buffer_on_launch = false;
     let mut harness = isolated_project_harness(config);
@@ -1092,24 +1097,27 @@ fn test_startup_policy_file_opened_later_gets_visable_tab()
         .apply_startup_empty_buffer_policy(fresh::app::StartupLaunch::NoPath);
 
     let file = harness.project_dir().unwrap().join("later.txt");
-    std::fs::write(&file,"later content").unwrap();
+    std::fs::write(&file, "later content").unwrap();
     harness.open_file(&file).unwrap();
     harness.render().unwrap();
 
     harness.assert_screen_contains("later content");
     let tab_bar = harness.screen_row_text(TAB_BAR_ROW);
-    assert!(tab_bar.contains("later.txt"), "Expected a visable 'later.txt' tab. Tab bar:\n{}",tab_bar);
+    assert!(
+        tab_bar.contains("later.txt"),
+        "Expected a visable 'later.txt' tab. Tab bar:\n{}",
+        tab_bar
+    );
 }
 
 #[test]
-fn test_startup_policy_adds_empty_tab_next_to_file_when_enabled()
-{
+fn test_startup_policy_adds_empty_tab_next_to_file_when_enabled() {
     let mut config = Config::default();
     config.editor.auto_create_empty_buffer_on_launch_with_file = true;
     let mut harness = isolated_project_harness(config);
 
     let file = harness.project_dir().unwrap().join("only.txt");
-    std::fs::write(&file,"only content").unwrap();
+    std::fs::write(&file, "only content").unwrap();
     harness.open_file(&file).unwrap();
     harness
         .editor_mut()
@@ -1117,12 +1125,15 @@ fn test_startup_policy_adds_empty_tab_next_to_file_when_enabled()
     harness.render().unwrap();
 
     let tab_bar = harness.screen_row_text(TAB_BAR_ROW);
-    assert!(tab_bar.contains("only.txt") && tab_bar.contains("[No Name]"), "Expected both 'only.txt' and '[No Name]' tabs. Tab bar:\n{}",tab_bar);
+    assert!(
+        tab_bar.contains("only.txt") && tab_bar.contains("[No Name]"),
+        "Expected both 'only.txt' and '[No Name]' tabs. Tab bar:\n{}",
+        tab_bar
+    );
 }
 
 #[test]
-fn test_startup_policy_hides_empty_tab_for_directory_by_default()
-{
+fn test_startup_policy_hides_empty_tab_for_directory_by_default() {
     let mut harness = isolated_project_harness(Config::default());
 
     harness
@@ -1131,5 +1142,9 @@ fn test_startup_policy_hides_empty_tab_for_directory_by_default()
     harness.render().unwrap();
 
     let tab_bar = harness.screen_row_text(TAB_BAR_ROW);
-    assert!(!tab_bar.contains("[No Name]"), "Expected no '[No Name]' tab. Tab bar: \n{}", tab_bar);
+    assert!(
+        !tab_bar.contains("[No Name]"),
+        "Expected no '[No Name]' tab. Tab bar: \n{}",
+        tab_bar
+    );
 }

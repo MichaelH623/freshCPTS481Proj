@@ -278,11 +278,11 @@ use std::time::Instant;
 
 // Re-export BufferId from event module for backward compatibility
 pub use self::types::{BufferKind, BufferMetadata, HoverTarget};
-pub use buffer_management::StartupLaunch;
 pub use self::warning_domains::{
     GeneralWarningDomain, LspWarningDomain, WarningDomain, WarningDomainRegistry, WarningLevel,
 };
 pub use crate::model::event::BufferId;
+pub use buffer_management::StartupLaunch;
 
 /// Decode a wire-side LSP URI to a host path. Thin wrapper over
 /// [`LspUri::to_host_path`](crate::app::types::LspUri::to_host_path)
