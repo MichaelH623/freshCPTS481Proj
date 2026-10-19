@@ -282,6 +282,7 @@ pub use self::warning_domains::{
     GeneralWarningDomain, LspWarningDomain, WarningDomain, WarningDomainRegistry, WarningLevel,
 };
 pub use crate::model::event::BufferId;
+pub use buffer_management::StartupLaunch;
 
 /// Decode a wire-side LSP URI to a host path. Thin wrapper over
 /// [`LspUri::to_host_path`](crate::app::types::LspUri::to_host_path)

@@ -828,3 +828,115 @@ impl Editor {
         false
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupLaunch {
+    NoPath,
+    Directory,
+    File,
+}
+
+impl StartupLaunch {
+    pub fn from_paths<'a>(paths: impl IntoIterator<Item = &'a std::path::Path>) -> Self {
+        let mut saw_dir = false;
+        for path in paths {
+            if !path.is_dir() {
+                return StartupLaunch::File;
+            }
+            saw_dir = true;
+        }
+
+        if saw_dir {
+            StartupLaunch::Directory
+        } else {
+            StartupLaunch::NoPath
+        }
+    }
+
+    pub fn wants_empty_buffer(self, editor: &crate::config::EditorConfig) -> bool {
+        match self {
+            StartupLaunch::NoPath => editor.auto_create_empty_buffer_on_launch,
+            StartupLaunch::Directory => editor.auto_create_empty_buffer_on_launch_with_directory,
+            StartupLaunch::File => editor.auto_create_empty_buffer_on_launch_with_file,
+        }
+    }
+}
+
+impl Editor {
+    pub fn apply_startup_empty_buffer_policy(&mut self, launch: StartupLaunch) {
+        let wants_empty = launch.wants_empty_buffer(&self.config.editor);
+        let active = self.active_buffer();
+        let pristine = self.active_window().is_pristine_scratch(active);
+
+        if !wants_empty && pristine {
+            if let Some(meta) = self.active_window_mut().buffer_metadata.get_mut(&active) {
+                meta.hidden_from_tabs = true;
+                meta.synthetic_placeholder = true;
+            }
+        } else if wants_empty && launch == StartupLaunch::File && !pristine {
+            let _ = self.new_buffer();
+        }
+    }
+}
+
+#[cfg(test)]
+mod startup_launch_tests {
+    use super::StartupLaunch;
+    use std::path::Path;
+
+    #[test]
+    fn no_paths_is_a_bare_launch() {
+        let none: [&Path; 0] = [];
+        assert_eq!(StartupLaunch::from_paths(none), StartupLaunch::NoPath);
+    }
+
+    #[test]
+    fn only_directories_is_a_directory_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            StartupLaunch::from_paths([dir.path()]),
+            StartupLaunch::Directory
+        );
+    }
+
+    #[test]
+    fn any_file_make_it_a_file_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("main.rs");
+        std::fs::write(&file, "").unwrap();
+        assert_eq!(
+            StartupLaunch::from_paths([dir.path(), file.as_path()]),
+            StartupLaunch::File
+        );
+    }
+
+    #[test]
+    fn a_file_that_does_not_exist_yet_is_a_file_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("new.rs");
+
+        assert_eq!(
+            StartupLaunch::from_paths([missing.as_path()]),
+            StartupLaunch::File
+        );
+    }
+
+    #[test]
+    fn defaults_match_the_issue() {
+        let editor = crate::config::Config::default().editor;
+        assert!(StartupLaunch::NoPath.wants_empty_buffer(&editor));
+        assert!(!StartupLaunch::Directory.wants_empty_buffer(&editor));
+        assert!(!StartupLaunch::File.wants_empty_buffer(&editor));
+    }
+
+    #[test]
+    fn each_launch_reads_its_own_setting() {
+        let mut editor = crate::config::Config::default().editor;
+        editor.auto_create_empty_buffer_on_launch = false;
+        editor.auto_create_empty_buffer_on_launch_with_directory = true;
+        editor.auto_create_empty_buffer_on_launch_with_file = true;
+        assert!(!StartupLaunch::NoPath.wants_empty_buffer(&editor));
+        assert!(StartupLaunch::Directory.wants_empty_buffer(&editor));
+        assert!(StartupLaunch::File.wants_empty_buffer(&editor));
+    }
+}
