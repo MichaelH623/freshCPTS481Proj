@@ -4289,6 +4289,18 @@ interface EditorConfig {
 		*/
 		auto_create_empty_buffer_on_last_buffer_close?: boolean;
 		/**
+		* Default: `true`
+		*/
+		auto_create_empty_buffer_on_launch?: boolean;
+		/**
+		* Default: `false`
+		*/
+		auto_create_empty_buffer_on_launch_with_directory?: boolean;
+		/**
+		* Default: `false`
+		*/
+		auto_create_empty_buffer_on_launch_with_file?: boolean;
+		/**
 		* Periodically save changes to recovery files, so work survives a crash.
 		*
 		* Default: `true`
