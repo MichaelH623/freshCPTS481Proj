@@ -1067,14 +1067,16 @@ impl Editor {
             }
         }
 
-        if let Some(handle) = self.windows.get(&owner).and_then(|w| w.terminal_manager.get(terminal_id))
-        {
-            if let Ok(mut state) = handle.state.lock()
-            {
-                state.scroll_to_bottom();
+        // When the focused split's terminal is live, keep its grid pinned to the
+        // bottom so it follows new output. (Unfocused live splits follow on their
+        // own — their grid sits at display_offset 0.)
+        if self.active_window().focused_terminal_live() {
+            if let Some(handle) = self.active_window().terminal_manager.get(terminal_id) {
+                if let Ok(mut state) = handle.state.lock() {
+                    state.scroll_to_bottom();
+                }
             }
         }
-        
 
         // Notify plugins, attributing output to the owning
         // *session* even when it's a background one (terminals

@@ -882,6 +882,12 @@ impl TerminalState {
         self.term.scroll_display(Scroll::Bottom);
         self.dirty = true;
     }
+    
+    pub fn scroll_up(&mut self, lines: i32)
+    {
+        self.term.scroll_display(alacritty_terminal::grid::Scroll::Delta(lines));
+        self.dirty = true;
+    }
 
     // =========================================================================
     // Terminal mode flags

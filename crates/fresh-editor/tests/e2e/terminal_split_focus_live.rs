@@ -167,3 +167,55 @@ fn terminal_keeps_updating_after_mouse_click_away() {
         .wait_until(|h| h.screen_to_string().contains("MARKER_AFTER_MOUSE_CLICK"))
         .unwrap();
 }
+
+#[test]
+fn unfocused_terminal_repaints_whengrid_was_scrolled_up()
+{
+    let mut harness = match harness_or_skip(120,30)
+    {
+        Some(h) => h,
+        None => return,
+    };
+    let terminal_buffer = setup_split_with_terminal(&mut harness);
+    {
+
+        let terminal_id = harness.editor().active_window().get_terminal_id(terminal_buffer).expect("terminal id");
+        let handle = harness.editor().terminal_manager().get(terminal_id).expect("terminal handle");
+    
+        let mut state = handle.state.lock().unwrap();
+
+        for i in 0..60
+        {
+        state.process_output(format!("FILL_{i}\r\n").as_bytes());
+        }
+    }
+    harness.render().unwrap();
+
+    harness.editor_mut().next_split();
+    harness.render().unwrap();
+    assert!(!harness.editor().is_terminal_mode(), "focus should have left the terminal");
+
+    {
+        let terminal_id = harness.editor().active_window().get_terminal_id(terminal_buffer).expect("terminal id");
+        let handle = harness.editor().terminal_manager().get(terminal_id).expect("terminal handle");
+        handle.state.lock().unwrap().scroll_up(10);
+    }
+    harness.render().unwrap();
+
+    write_to_terminal(&harness,terminal_buffer, b"echo MARKER_UNFOCUSED_REPAINT\n");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+
+    loop 
+    {
+        harness.editor_mut().process_async_messages();
+        harness.render().unwrap();
+        if harness.screen_to_string().contains("MARKER_UNFOCUSED_REPAINT")
+        {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "unfocused terminal pane never showed the new output:\n{}",harness.screen_to_string());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
