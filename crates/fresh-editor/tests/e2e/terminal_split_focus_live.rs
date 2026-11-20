@@ -202,8 +202,15 @@ fn unfocused_terminal_repaints_whengrid_was_scrolled_up()
     }
     harness.render().unwrap();
 
-    write_to_terminal(&harness,terminal_buffer, b"echo MARKER_UNFOCUSED_REPAINT\n");
+    {
+        let terminal_id = harness.editor().active_window().get_terminal_id(terminal_buffer).expect("terminal id");
+        let handle = harness.editor().terminal_manager().get(terminal_id).expect("terminal handle");
+        handle.state.lock().unwrap().process_output(b"MARKER_UNFOCUSED_REPAINT\r\n");
 
+    }
+    harness.render().unwrap();
+    assert!(!harness.screen_to_string().contains("MARKER_UNFOCUSED_REPAINT"), "setup: the marker should be hidden while the grid is scrolled up");
+    write_to_terminal(&harness,terminal_buffer,b"\r\n");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
 
     loop 
