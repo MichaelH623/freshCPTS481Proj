@@ -1262,14 +1262,18 @@ mod tests {
     /// of the previous tab and the leading space of the next.
 
     #[test]
-    fn test_tab_after_fullwidth_char_uses_display_width()
-    {
-        let tokens = vec! [
-            make_text_token ("\u{3042}\tb",Some(0)), make_newline_token(Some(5)),
+    fn test_tab_after_fullwidth_char_uses_display_width() {
+        let tokens = vec![
+            make_text_token("\u{3042}\tb", Some(0)),
+            make_newline_token(Some(5)),
         ];
-        let lines: Vec<_> = ViewLineIterator::new(&tokens,false,false,4,false).collect();
-        assert_eq!(lines.len(),1);
-        assert_eq!(lines[0].char_visual_cols, vec![0,2,3,4,5], "a tab after a full-width char must reach the tab stop at col 4");
+        let lines: Vec<_> = ViewLineIterator::new(&tokens, false, false, 4, false).collect();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines[0].char_visual_cols,
+            vec![0, 2, 3, 4, 5],
+            "a tab after a full-width char must reach the tab stop at col 4"
+        );
     }
     #[test]
     fn test_adjacent_tabs_visual_cols_monotonic() {
