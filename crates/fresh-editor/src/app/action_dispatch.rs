@@ -108,7 +108,7 @@ impl Editor {
         self.clear_active_view_pin_and_resync(|tab| tab.line_wrap_override = None);
         self.persist_config_change(crate::config_keys::EDITOR_LINE_WRAP, new_value);
 
-        let state_str = Self::on_off_label(is_now_read_only);
+        let state = Self::on_off_label(self.config.editor.line_wrap);
         self.set_status_message(t!("view.line_wrap_state", state = state).to_string());
     }
 
@@ -127,7 +127,7 @@ impl Editor {
             new_value,
         );
 
-        let state = Self::on_off_label(self.config.editor.line_wrap);
+        let state = Self::on_off_label(self.config.editor.highlight_current_line);
         self.set_status_message(
             t!("view.current_line_highlight_state", state = state).to_string(),
         );
@@ -169,7 +169,7 @@ impl Editor {
             new_value,
         );
 
-        let state = Self::on_off_label(self.config.editor.highlight_current_line);
+        let state = Self::on_off_label(new_value);
         self.set_status_message(
             t!("view.occurrence_highlight_state", state = state).to_string(),
         );
@@ -897,7 +897,7 @@ impl Editor {
                 self.active_window_mut()
                     .mark_buffer_read_only(buffer_id, is_now_read_only);
 
-                let state = Self::on_off_label(new_value);
+                let state_str = Self::on_off_label(is_now_read_only);
                 self.set_status_message(t!("view.read_only_state", state = state_str).to_string());
             }
             Action::TogglePageView => {
