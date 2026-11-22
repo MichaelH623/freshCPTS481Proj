@@ -79,6 +79,38 @@ impl Editor {
         }
     }
 
+     // Flip the editor-wide `line_wrap` default and save it to the user config
+     // helper method for handle_action 
+    fn toggle_global_line_wrap(&mut self) {
+        let new_value = !self.config.editor.line_wrap;
+        self.config_mut().editor.line_wrap = new_value;
+
+        self.sync_windows_config();
+
+        let active_split = self.effective_active_split();
+        if let Some(view_state) = self
+            .windows
+            .get_mut(&self.active_window)
+            .and_then(|w| w.buffers.split_view_states_mut())
+            .and_then(|states| states.get_mut(&active_split))
+        {
+            view_state.buffer_tab_state_mut().line_wrap_override = None;
+        }
+
+        for window in self.windows.values_mut() {
+            window.resync_global_display_defaults();
+        }
+
+        self.persist_config_change(crate::config_keys::EDITOR_LINE_WRAP, new_value);
+
+        let state = if self.config.editor.line_wrap {
+            t!("view.state_enabled").to_string()
+        } else {
+            t!("view.state_disabled").to_string()
+        };
+        self.set_status_message(t!("view.line_wrap_state", state = state).to_string());
+    }
+
     /// Handle an action (for normal mode and command execution).
     /// Used by the app module internally and by the GUI module for native menu dispatch.
     pub(crate) fn handle_action(&mut self, action: Action) -> AnyhowResult<()> {
@@ -637,49 +669,8 @@ impl Editor {
             Action::OpenTerminalInDock => {
                 self.handle_open_terminal_in_dock()?;
             }
-            Action::ToggleLineWrap => {
-                let new_value = !self.config.editor.line_wrap;
-                self.config_mut().editor.line_wrap = new_value;
-                // `resolve_line_wrap_for_buffer` below reads
-                // `Window::config()`, which holds a *separate* `Arc<Config>`
-                // clone from the Editor's. Without this sync the resolve
-                // would return the pre-toggle value and we'd write the
-                // *old* line-wrap state back into the viewport — silently
-                // no-op'ing the toggle while still flipping the status
-                // message. See `Editor::config_mut` for the broader rule.
-                self.sync_windows_config();
-
-                // Only this view's pin is dropped: the user asked for a global
-                // default on the view in front of them, which is no reason to
-                // un-pin work they did elsewhere. `effective_active_split` is a
-                // shown group's focused panel, not the pane showing it.
-                let active_split = self.effective_active_split();
-                if let Some(view_state) = self
-                    .windows
-                    .get_mut(&self.active_window)
-                    .and_then(|w| w.buffers.split_view_states_mut())
-                    .and_then(|states| states.get_mut(&active_split))
-                {
-                    view_state.buffer_tab_state_mut().line_wrap_override = None;
-                }
-
-                for window in self.windows.values_mut() {
-                    window.resync_global_display_defaults();
-                }
-
-                // `editor.line_wrap` is an editor-wide default, so an
-                // unsuffixed toggle saves it to the user config layer — see the
-                // scope convention on `COMMANDS` in `input/commands.rs`. The
-                // per-buffer variant is "Toggle Line Wrap (Current Buffer)".
-                self.persist_config_change(crate::config_keys::EDITOR_LINE_WRAP, new_value);
-
-                let state = if self.config.editor.line_wrap {
-                    t!("view.state_enabled").to_string()
-                } else {
-                    t!("view.state_disabled").to_string()
-                };
-                self.set_status_message(t!("view.line_wrap_state", state = state).to_string());
-            }
+            // calls helper method.
+            Action::ToggleLineWrap => self.toggle_global_line_wrap(),
             Action::ToggleCurrentLineHighlight => {
                 let new_value = !self.config.editor.highlight_current_line;
                 self.config_mut().editor.highlight_current_line = new_value;
