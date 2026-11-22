@@ -157,6 +157,10 @@ impl Editor {
     pub(super) fn record_macro_action(&mut self, action: &Action) {
         if let Action::PromptConfirm = action {
             if let Some(prompt) = &self.active_window_mut().prompt {
+                if matches!(prompt.prompt_type,crate::view::prompt::PromptType::Plugin{ .. })
+                {
+                    return;
+                }
                 let text = prompt.get_text().to_string();
                 self.active_window_mut()
                     .macros
