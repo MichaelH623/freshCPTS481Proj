@@ -303,6 +303,23 @@ impl Editor {
         }
     }
 
+    /// Confirm the open prompt and carry out whatever it resolves to, added to removed duplicated code in confirm prompt and confirm prompt with text
+    fn confirm_prompt_and_dispatch(&mut self) -> AnyhowResult<()> {
+        if let Some((input, prompt_type, selected_index)) = self.confirm_prompt() {
+            use super::prompt_actions::PromptResult;
+            match self.handle_prompt_confirm_input(input, prompt_type, selected_index) {
+                PromptResult::ExecuteAction(action) => {
+                    return self.handle_action(action);
+                }
+                PromptResult::EarlyReturn => {
+                    return Ok(());
+                }
+                PromptResult::Done => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Handle an action (for normal mode and command execution).
     /// Used by the app module internally and by the GUI module for native menu dispatch.
     pub(crate) fn handle_action(&mut self, action: Action) -> AnyhowResult<()> {
@@ -1792,20 +1809,7 @@ impl Editor {
             Action::OpenKeybindingEditor => {
                 self.open_keybinding_editor();
             }
-            Action::PromptConfirm => {
-                if let Some((input, prompt_type, selected_index)) = self.confirm_prompt() {
-                    use super::prompt_actions::PromptResult;
-                    match self.handle_prompt_confirm_input(input, prompt_type, selected_index) {
-                        PromptResult::ExecuteAction(action) => {
-                            return self.handle_action(action);
-                        }
-                        PromptResult::EarlyReturn => {
-                            return Ok(());
-                        }
-                        PromptResult::Done => {}
-                    }
-                }
-            }
+            Action::PromptConfirm => return self.confirm_prompt_and_dispatch(),
             Action::PluginNextKey(ref chord) => {
                 // For macro playback: the key a plugin's `getNextKey` took.
                 if !self.deliver_next_key(crate::input::router::next_key_payload(chord)) {
@@ -1821,18 +1825,7 @@ impl Editor {
                     prompt.set_input(text.clone());
                     self.update_prompt_suggestions();
                 }
-                if let Some((input, prompt_type, selected_index)) = self.confirm_prompt() {
-                    use super::prompt_actions::PromptResult;
-                    match self.handle_prompt_confirm_input(input, prompt_type, selected_index) {
-                        PromptResult::ExecuteAction(action) => {
-                            return self.handle_action(action);
-                        }
-                        PromptResult::EarlyReturn => {
-                            return Ok(());
-                        }
-                        PromptResult::Done => {}
-                    }
-                }
+                return self.confirm_prompt_and_dispatch();
             }
             Action::PopupConfirm => {
                 use super::popup_actions::PopupConfirmResult;
