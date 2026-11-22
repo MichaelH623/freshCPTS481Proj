@@ -79,8 +79,8 @@ impl Editor {
         }
     }
 
-     // Flip the editor-wide `line_wrap` default and save it to the user config
-     // helper method for handle_action 
+    // Flip the editor-wide `line_wrap` default and save it to the user config
+    // helper method for handle_action 
     fn toggle_global_line_wrap(&mut self) {
         let new_value = !self.config.editor.line_wrap;
         self.config_mut().editor.line_wrap = new_value;
@@ -109,6 +109,45 @@ impl Editor {
             t!("view.state_disabled").to_string()
         };
         self.set_status_message(t!("view.line_wrap_state", state = state).to_string());
+    }
+
+    // Flip the editor-wide current-line highlight and save it to the user config
+    // helper method for handle_action
+    fn toggle_global_current_line_highlight(&mut self) {
+        let new_value = !self.config.editor.highlight_current_line;
+        self.config_mut().editor.highlight_current_line = new_value;
+        self.sync_windows_config();
+
+        // Only this view's pin is dropped as in toggle_global_line_wrap
+        let active_split = self.effective_active_split();
+        if let Some(view_state) = self
+            .windows
+            .get_mut(&self.active_window)
+            .and_then(|w| w.buffers.split_view_states_mut())
+            .and_then(|states| states.get_mut(&active_split))
+        {
+            view_state
+                .buffer_tab_state_mut()
+                .highlight_current_line_override = None;
+        }
+
+        for window in self.windows.values_mut() {
+            window.resync_global_display_defaults();
+        }
+
+        self.persist_config_change(
+            crate::config_keys::EDITOR_HIGHLIGHT_CURRENT_LINE,
+            new_value,
+        );
+
+        let state = if self.config.editor.highlight_current_line {
+            t!("view.state_enabled").to_string()
+        } else {
+            t!("view.state_disabled").to_string()
+        };
+        self.set_status_message(
+            t!("view.current_line_highlight_state", state = state).to_string(),
+        );
     }
 
     /// Handle an action (for normal mode and command execution).
@@ -671,45 +710,7 @@ impl Editor {
             }
             // calls helper method.
             Action::ToggleLineWrap => self.toggle_global_line_wrap(),
-            Action::ToggleCurrentLineHighlight => {
-                let new_value = !self.config.editor.highlight_current_line;
-                self.config_mut().editor.highlight_current_line = new_value;
-                // The sweep below resolves against `Window::config()`, a separate
-                // `Arc<Config>` clone, so fan the new value out first or it
-                // writes the pre-toggle state straight back.
-                self.sync_windows_config();
-
-                // Only this view's pin is dropped, as in `ToggleLineWrap` above.
-                let active_split = self.effective_active_split();
-                if let Some(view_state) = self
-                    .windows
-                    .get_mut(&self.active_window)
-                    .and_then(|w| w.buffers.split_view_states_mut())
-                    .and_then(|states| states.get_mut(&active_split))
-                {
-                    view_state
-                        .buffer_tab_state_mut()
-                        .highlight_current_line_override = None;
-                }
-
-                for window in self.windows.values_mut() {
-                    window.resync_global_display_defaults();
-                }
-
-                self.persist_config_change(
-                    crate::config_keys::EDITOR_HIGHLIGHT_CURRENT_LINE,
-                    new_value,
-                );
-
-                let state = if self.config.editor.highlight_current_line {
-                    t!("view.state_enabled").to_string()
-                } else {
-                    t!("view.state_disabled").to_string()
-                };
-                self.set_status_message(
-                    t!("view.current_line_highlight_state", state = state).to_string(),
-                );
-            }
+            Action::ToggleCurrentLineHighlight => self.toggle_global_current_line_highlight(),
             Action::ToggleOccurrenceHighlight => {
                 let new_value = !self.config.editor.highlight_occurrences;
                 self.config_mut().editor.highlight_occurrences = new_value;
