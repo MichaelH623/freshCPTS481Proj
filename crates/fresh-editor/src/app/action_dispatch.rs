@@ -150,6 +150,58 @@ impl Editor {
         );
     }
 
+    // Flip the editor-wide occurrence highlight on every open buffer that hasn't pinned its own choice, and save it to the user config.
+    // Helper method for handle_action
+    fn toggle_global_occurrence_highlight(&mut self) {
+        let new_value = !self.config.editor.highlight_occurrences;
+        self.config_mut().editor.highlight_occurrences = new_value;
+        let active_buffer = self.active_buffer();
+
+        // Update all open buffers
+        // A buffer the user pinned with the "Current Buffer" variant keeps its choice 
+        // except the active one, whose pin is cleared first as a global intent
+        if let Some(state) = self
+            .windows
+            .get_mut(&self.active_window)
+            .map(|w| &mut w.buffers)
+            .expect("active window present")
+            .get_mut(&active_buffer)
+        {
+            state.buffer_settings.highlight_occurrences_override = None;
+        }
+        for window in self.windows.values_mut() {
+            for (_, state) in &mut window.buffers {
+                if state
+                    .buffer_settings
+                    .highlight_occurrences_override
+                    .is_some()
+                {
+                    continue;
+                }
+                state.reference_highlight_overlay.enabled = new_value;
+                if !new_value {
+                    state
+                        .reference_highlight_overlay
+                        .clear(&mut state.overlays, &mut state.marker_list);
+                }
+            }
+        }
+
+        self.persist_config_change(
+            crate::config_keys::EDITOR_HIGHLIGHT_OCCURRENCES,
+            new_value,
+        );
+
+        let state = if new_value {
+            t!("view.state_enabled").to_string()
+        } else {
+            t!("view.state_disabled").to_string()
+        };
+        self.set_status_message(
+            t!("view.occurrence_highlight_state", state = state).to_string(),
+        );
+    }
+
     /// Handle an action (for normal mode and command execution).
     /// Used by the app module internally and by the GUI module for native menu dispatch.
     pub(crate) fn handle_action(&mut self, action: Action) -> AnyhowResult<()> {
@@ -711,55 +763,7 @@ impl Editor {
             // calls helper method.
             Action::ToggleLineWrap => self.toggle_global_line_wrap(),
             Action::ToggleCurrentLineHighlight => self.toggle_global_current_line_highlight(),
-            Action::ToggleOccurrenceHighlight => {
-                let new_value = !self.config.editor.highlight_occurrences;
-                self.config_mut().editor.highlight_occurrences = new_value;
-                let active_buffer = self.active_buffer();
-
-                // Update all open buffers. A buffer the user pinned with the
-                // "(Current Buffer)" variant keeps its choice — except the
-                // active one, whose pin is cleared first as a global intent.
-                if let Some(state) = self
-                    .windows
-                    .get_mut(&self.active_window)
-                    .map(|w| &mut w.buffers)
-                    .expect("active window present")
-                    .get_mut(&active_buffer)
-                {
-                    state.buffer_settings.highlight_occurrences_override = None;
-                }
-                for window in self.windows.values_mut() {
-                    for (_, state) in &mut window.buffers {
-                        if state
-                            .buffer_settings
-                            .highlight_occurrences_override
-                            .is_some()
-                        {
-                            continue;
-                        }
-                        state.reference_highlight_overlay.enabled = new_value;
-                        if !new_value {
-                            state
-                                .reference_highlight_overlay
-                                .clear(&mut state.overlays, &mut state.marker_list);
-                        }
-                    }
-                }
-
-                self.persist_config_change(
-                    crate::config_keys::EDITOR_HIGHLIGHT_OCCURRENCES,
-                    new_value,
-                );
-
-                let state = if new_value {
-                    t!("view.state_enabled").to_string()
-                } else {
-                    t!("view.state_disabled").to_string()
-                };
-                self.set_status_message(
-                    t!("view.occurrence_highlight_state", state = state).to_string(),
-                );
-            }
+            Action::ToggleOccurrenceHighlight => self.toggle_global_occurrence_highlight(),
             Action::ToggleReadOnly => {
                 let buffer_id = self.active_buffer();
                 let is_now_read_only = self
