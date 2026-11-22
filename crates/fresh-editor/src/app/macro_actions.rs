@@ -157,9 +157,11 @@ impl Editor {
     pub(super) fn record_macro_action(&mut self, action: &Action) {
         if let Action::PromptConfirm = action {
             if let Some(prompt) = &self.active_window_mut().prompt {
-                if matches!(prompt.prompt_type,crate::view::prompt::PromptType::Plugin{ .. })
-                {
-                   return;
+                if matches!(
+                    prompt.prompt_type,
+                    crate::view::prompt::PromptType::Plugin { .. }
+                ) {
+                    return;
                 }
                 let text = prompt.get_text().to_string();
                 self.active_window_mut()
@@ -427,51 +429,74 @@ impl Editor {
 }
 
 #[cfg(test)]
-mod tests
-{
+mod tests {
     use super::*;
     use crate::config::Config;
     use crate::config_io::DirectoryContext;
     use crate::view::prompt::{Prompt, PromptType};
     use std::sync::Arc;
 
-    fn test_editor() -> Editor
-    {
+    fn test_editor() -> Editor {
         let temp = tempfile::tempdir().unwrap();
         let dir_context = DirectoryContext::for_testing(temp.path());
         std::mem::forget(temp);
-        Editor::for_test(Config::default(), 80,24,None,dir_context,crate::view::color_support::ColorCapability::TrueColor,Arc::new(crate::model::filesystem::StdFileSystem),None,None,false,false,false).unwrap()
+        Editor::for_test(
+            Config::default(),
+            80,
+            24,
+            None,
+            dir_context,
+            crate::view::color_support::ColorCapability::TrueColor,
+            Arc::new(crate::model::filesystem::StdFileSystem),
+            None,
+            None,
+            false,
+            false,
+            false,
+        )
+        .unwrap()
     }
 
-
-    fn record_confirm(editor: &mut  Editor, prompt_type: PromptType) -> Vec<Action>
-    {   
+    fn record_confirm(editor: &mut Editor, prompt_type: PromptType) -> Vec<Action> {
         editor.start_macro_recording('1');
         editor.active_window_mut().prompt = Some(Prompt::new("Number: ".to_string(), prompt_type));
         editor.record_macro_action(&Action::PromptConfirm);
         editor.active_window_mut().prompt = None;
         editor.stop_macro_recording();
-        editor.active_window().macros.get('1').map(<[_]>::to_vec).unwrap_or_default()
+        editor
+            .active_window()
+            .macros
+            .get('1')
+            .map(<[_]>::to_vec)
+            .unwrap_or_default()
     }
 
     #[test]
-    fn plugin_prompt_confirm_is_not_recorded()
-    {
-    let mut editor = test_editor();
-    let actions = record_confirm(&mut editor, PromptType:: Plugin {
-        custom_type: "ask-number".to_string(),
-        },
+    fn plugin_prompt_confirm_is_not_recorded() {
+        let mut editor = test_editor();
+        let actions = record_confirm(
+            &mut editor,
+            PromptType::Plugin {
+                custom_type: "ask-number".to_string(),
+            },
         );
         assert!(
-        !actions.iter().any(|a|matches! (a,Action::PromptConfirmWithText(_))), "plugin prompt input was recorded, so replay would not re-prompt: {actions:?}"
+            !actions
+                .iter()
+                .any(|a| matches!(a, Action::PromptConfirmWithText(_))),
+            "plugin prompt input was recorded, so replay would not re-prompt: {actions:?}"
         );
     }
 
     #[test]
-    fn builtin_prompt_confirm_still_records_its_text()
-    {
-    let mut editor = test_editor();
-    let actions = record_confirm(&mut editor, PromptType::QuickOpen);
-    assert!(actions.iter().any(|a| matches!(a,Action::PromptConfirmWithText(_))), "built-in prompt cofirm should still be recorded with its text: {actions:?}");
+    fn builtin_prompt_confirm_still_records_its_text() {
+        let mut editor = test_editor();
+        let actions = record_confirm(&mut editor, PromptType::QuickOpen);
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, Action::PromptConfirmWithText(_))),
+            "built-in prompt cofirm should still be recorded with its text: {actions:?}"
+        );
     }
 }
