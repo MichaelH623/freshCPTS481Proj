@@ -72,6 +72,18 @@ fn ground_attrs(theme: &Theme, key: &'static str) -> Modifier {
     }
 }
 
+/// The default editor foreground style: `editor.fg` with its attributes.
+fn editor_fg_style(theme: &Theme) -> Style {
+    Style::default()
+        .fg(theme.editor_fg)
+        .add_modifier(ground_attrs(theme, "editor.fg"))
+}
+
+/// Whether an ANSI style sets any fg, bg, or modifier.
+fn has_ansi_style(s: &Style) -> bool {
+    s.fg.is_some() || s.bg.is_some() || !s.add_modifier.is_empty()
+}
+
 /// Whether an overlay paints a background of its own (not `Reset`).
 fn overlay_has_own_bg(overlay: &Overlay, theme: &Theme) -> bool {
     let bg = match &overlay.face {
@@ -110,6 +122,18 @@ impl StyleAcc {
             region: self.region,
         }
     }
+
+    /// Record `key` as the fg theme key and add its attributes.
+    fn take_fg_key(&mut self, theme: &Theme, key: &'static str) {
+        self.fg_theme_key = Some(key);
+        self.style = self.style.add_modifier(theme.resolve_modifier_key(key));
+    }
+
+    /// Record `key` as the bg theme key and add its attributes.
+    fn take_bg_key(&mut self, theme: &Theme, key: &'static str) {
+        self.bg_theme_key = Some(key);
+        self.style = self.style.add_modifier(theme.resolve_modifier_key(key));
+    }
 }
 
 /// Compute the style for a character by layering:
@@ -142,9 +166,7 @@ fn base_style(ctx: &CharStyleContext) -> StyleAcc {
         if let Some(ref fg) = ts.fg {
             s = s.fg(fg.to_ratatui(ctx.theme));
         } else {
-            s = s
-                .fg(ctx.theme.editor_fg)
-                .add_modifier(ground_attrs(ctx.theme, "editor.fg"));
+            s = editor_fg_style(ctx.theme);
             fg_theme_key = Some("editor.fg");
         }
         if let Some(ref bg) = ts.bg {
@@ -161,18 +183,13 @@ fn base_style(ctx: &CharStyleContext) -> StyleAcc {
         }
         region = "Plugin Token";
         s
-    } else if ctx.ansi_style.fg.is_some()
-        || ctx.ansi_style.bg.is_some()
-        || !ctx.ansi_style.add_modifier.is_empty()
-    {
+    } else if has_ansi_style(&ctx.ansi_style) {
         // Apply ANSI styling from escape codes
         let mut s = Style::default();
         if let Some(fg) = ctx.ansi_style.fg {
             s = s.fg(fg);
         } else {
-            s = s
-                .fg(ctx.theme.editor_fg)
-                .add_modifier(ground_attrs(ctx.theme, "editor.fg"));
+            s = editor_fg_style(ctx.theme);
             fg_theme_key = Some("editor.fg");
         }
         if let Some(bg) = ctx.ansi_style.bg {
@@ -189,9 +206,7 @@ fn base_style(ctx: &CharStyleContext) -> StyleAcc {
     } else {
         // Default color from theme
         fg_theme_key = Some("editor.fg");
-        Style::default()
-            .fg(ctx.theme.editor_fg)
-            .add_modifier(ground_attrs(ctx.theme, "editor.fg"))
+        editor_fg_style(ctx.theme)
     };
 
     StyleAcc {
@@ -211,9 +226,7 @@ fn apply_syntax(ctx: &CharStyleContext, acc: &mut StyleAcc) {
     // If we have ANSI style but also syntax highlighting, syntax takes precedence for color
     // (unless ANSI has explicit color which we already applied above)
     if let Some(color) = highlight_color {
-        if ctx.ansi_style.fg.is_none()
-            && (ctx.ansi_style.bg.is_some() || !ctx.ansi_style.add_modifier.is_empty())
-        {
+        if ctx.ansi_style.fg.is_none() && has_ansi_style(&ctx.ansi_style) {
             acc.style = acc.style.fg(color);
             acc.fg_theme_key = ctx.highlight_theme_key;
         }
@@ -236,8 +249,7 @@ fn apply_syntax(ctx: &CharStyleContext, acc: &mut StyleAcc) {
     if let Some(bg) = ctx.highlight_bg {
         acc.style = acc.style.bg(bg);
         if let Some(key) = ctx.highlight_bg_theme_key {
-            acc.bg_theme_key = Some(key);
-            acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
+            acc.take_bg_key(ctx.theme, key);
         }
     }
 }
@@ -276,10 +288,10 @@ fn apply_overlay(
         OverlayFace::Underline {
             color,
             style: _underline_style,
-        } => apply_underline_overlay(ctx, overlay, color, is_styled_inline_cell, acc),
+        } => apply_fg_overlay(ctx, overlay, color, true, is_styled_inline_cell, acc),
         OverlayFace::Background { color } => apply_background_overlay(ctx, overlay, color, acc),
         OverlayFace::Foreground { color } => {
-            apply_foreground_overlay(ctx, overlay, color, is_styled_inline_cell, acc)
+            apply_fg_overlay(ctx, overlay, color, false, is_styled_inline_cell, acc)
         }
         OverlayFace::Style {
             style: overlay_style,
@@ -303,20 +315,24 @@ fn apply_overlay(
     }
 }
 
-fn apply_underline_overlay(
+/// Apply a foreground (or, with `underline`, an underline) overlay.
+fn apply_fg_overlay(
     ctx: &CharStyleContext,
     overlay: &Overlay,
     color: &Color,
+    underline: bool,
     is_styled_inline_cell: bool,
     acc: &mut StyleAcc,
 ) {
     if is_styled_inline_cell {
         return;
     }
-    acc.style = acc.style.add_modifier(Modifier::UNDERLINED).fg(*color);
+    if underline {
+        acc.style = acc.style.add_modifier(Modifier::UNDERLINED);
+    }
+    acc.style = acc.style.fg(*color);
     if let Some(key) = overlay.theme_key {
-        acc.fg_theme_key = Some(key);
-        acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
+        acc.take_fg_key(ctx.theme, key);
     }
 }
 
@@ -328,31 +344,10 @@ fn apply_background_overlay(
 ) {
     acc.style = acc.style.bg(*color);
     if let Some(key) = overlay.theme_key {
-        acc.bg_theme_key = Some(key);
         // Pick up any SGR modifier the theme associates with
         // this bg slot (e.g. terminal-adaptive themes ship
         // `Reversed` for `ui.semantic_highlight_bg`).
-        let m = ctx.theme.resolve_modifier_key(key);
-        if !m.is_empty() {
-            acc.style = acc.style.add_modifier(m);
-        }
-    }
-}
-
-fn apply_foreground_overlay(
-    ctx: &CharStyleContext,
-    overlay: &Overlay,
-    color: &Color,
-    is_styled_inline_cell: bool,
-    acc: &mut StyleAcc,
-) {
-    if is_styled_inline_cell {
-        return;
-    }
-    acc.style = acc.style.fg(*color);
-    if let Some(key) = overlay.theme_key {
-        acc.fg_theme_key = Some(key);
-        acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
+        acc.take_bg_key(ctx.theme, key);
     }
 }
 
@@ -367,8 +362,7 @@ fn apply_style_overlay(
         if let Some(bg) = overlay_style.bg {
             acc.style = acc.style.bg(bg);
             if let Some(key) = overlay.theme_key {
-                acc.bg_theme_key = Some(key);
-                acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
+                acc.take_bg_key(ctx.theme, key);
             }
         }
         return;
