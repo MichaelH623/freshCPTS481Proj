@@ -261,138 +261,202 @@ fn apply_overlays(ctx: &CharStyleContext, acc: &mut StyleAcc) {
     // the source text. Legibility fallbacks are handled separately below.
     let is_styled_inline_cell = ctx.byte_pos.is_none() && ctx.token_style.is_some();
     for overlay in ctx.active_overlays {
-        match &overlay.face {
-            OverlayFace::Underline {
-                color,
-                style: _underline_style,
-            } => {
-                if is_styled_inline_cell {
-                    continue;
-                }
-                acc.style = acc.style.add_modifier(Modifier::UNDERLINED).fg(*color);
-                if let Some(key) = overlay.theme_key {
-                    acc.fg_theme_key = Some(key);
-                    acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
-                }
+        apply_overlay(ctx, overlay, is_styled_inline_cell, acc);
+    }
+}
+
+/// Apply a single overlay's face on top of the accumulated style.
+fn apply_overlay(
+    ctx: &CharStyleContext,
+    overlay: &Overlay,
+    is_styled_inline_cell: bool,
+    acc: &mut StyleAcc,
+) {
+    match &overlay.face {
+        OverlayFace::Underline {
+            color,
+            style: _underline_style,
+        } => apply_underline_overlay(ctx, overlay, color, is_styled_inline_cell, acc),
+        OverlayFace::Background { color } => apply_background_overlay(ctx, overlay, color, acc),
+        OverlayFace::Foreground { color } => {
+            apply_foreground_overlay(ctx, overlay, color, is_styled_inline_cell, acc)
+        }
+        OverlayFace::Style {
+            style: overlay_style,
+        } => apply_style_overlay(ctx, overlay, overlay_style, is_styled_inline_cell, acc),
+        OverlayFace::ThemedStyle {
+            fallback_style,
+            fg_theme,
+            bg_theme,
+            fg_on_collision_only,
+            fg_on_low_contrast,
+        } => apply_themed_style_overlay(
+            ctx,
+            fallback_style,
+            fg_theme,
+            bg_theme,
+            fg_on_collision_only,
+            fg_on_low_contrast,
+            is_styled_inline_cell,
+            acc,
+        ),
+    }
+}
+
+fn apply_underline_overlay(
+    ctx: &CharStyleContext,
+    overlay: &Overlay,
+    color: &Color,
+    is_styled_inline_cell: bool,
+    acc: &mut StyleAcc,
+) {
+    if is_styled_inline_cell {
+        return;
+    }
+    acc.style = acc.style.add_modifier(Modifier::UNDERLINED).fg(*color);
+    if let Some(key) = overlay.theme_key {
+        acc.fg_theme_key = Some(key);
+        acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
+    }
+}
+
+fn apply_background_overlay(
+    ctx: &CharStyleContext,
+    overlay: &Overlay,
+    color: &Color,
+    acc: &mut StyleAcc,
+) {
+    acc.style = acc.style.bg(*color);
+    if let Some(key) = overlay.theme_key {
+        acc.bg_theme_key = Some(key);
+        // Pick up any SGR modifier the theme associates with
+        // this bg slot (e.g. terminal-adaptive themes ship
+        // `Reversed` for `ui.semantic_highlight_bg`).
+        let m = ctx.theme.resolve_modifier_key(key);
+        if !m.is_empty() {
+            acc.style = acc.style.add_modifier(m);
+        }
+    }
+}
+
+fn apply_foreground_overlay(
+    ctx: &CharStyleContext,
+    overlay: &Overlay,
+    color: &Color,
+    is_styled_inline_cell: bool,
+    acc: &mut StyleAcc,
+) {
+    if is_styled_inline_cell {
+        return;
+    }
+    acc.style = acc.style.fg(*color);
+    if let Some(key) = overlay.theme_key {
+        acc.fg_theme_key = Some(key);
+        acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
+    }
+}
+
+fn apply_style_overlay(
+    ctx: &CharStyleContext,
+    overlay: &Overlay,
+    overlay_style: &Style,
+    is_styled_inline_cell: bool,
+    acc: &mut StyleAcc,
+) {
+    if is_styled_inline_cell {
+        if let Some(bg) = overlay_style.bg {
+            acc.style = acc.style.bg(bg);
+            if let Some(key) = overlay.theme_key {
+                acc.bg_theme_key = Some(key);
+                acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
             }
-            OverlayFace::Background { color } => {
-                acc.style = acc.style.bg(*color);
-                if let Some(key) = overlay.theme_key {
-                    acc.bg_theme_key = Some(key);
-                    // Pick up any SGR modifier the theme associates with
-                    // this bg slot (e.g. terminal-adaptive themes ship
-                    // `Reversed` for `ui.semantic_highlight_bg`).
-                    let m = ctx.theme.resolve_modifier_key(key);
-                    if !m.is_empty() {
-                        acc.style = acc.style.add_modifier(m);
-                    }
-                }
-            }
-            OverlayFace::Foreground { color } => {
-                if is_styled_inline_cell {
-                    continue;
-                }
-                acc.style = acc.style.fg(*color);
-                if let Some(key) = overlay.theme_key {
-                    acc.fg_theme_key = Some(key);
-                    acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
-                }
-            }
-            OverlayFace::Style {
-                style: overlay_style,
-            } => {
-                if is_styled_inline_cell {
-                    if let Some(bg) = overlay_style.bg {
-                        acc.style = acc.style.bg(bg);
-                        if let Some(key) = overlay.theme_key {
-                            acc.bg_theme_key = Some(key);
-                            acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
-                        }
-                    }
-                    continue;
-                }
-                acc.style = acc.style.patch(*overlay_style);
-                if let Some(key) = overlay.theme_key {
-                    acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
-                    if overlay_style.bg.is_some() {
-                        acc.bg_theme_key = Some(key);
-                    }
-                    if overlay_style.fg.is_some() {
-                        acc.fg_theme_key = Some(key);
-                    }
-                }
-            }
-            OverlayFace::ThemedStyle {
-                fallback_style,
-                fg_theme,
-                bg_theme,
-                fg_on_collision_only,
-                fg_on_low_contrast,
-            } => {
-                let mut themed_style = *fallback_style;
-                // An injected cell — a spliced inlay hint or plugin
-                // annotation — takes the band's *ground* and not its ink: the
-                // band's own foreground and attributes belong to the source
-                // character it actually covers. The two legibility rules
-                // below are not ordinary ink, so they still reach such a
-                // cell; losing them is what left a hint unreadable on an
-                // occurrence highlight. Sharing one path with ordinary cells
-                // is what keeps that from coming apart again.
-                if is_styled_inline_cell {
-                    themed_style.fg = None;
-                    themed_style.add_modifier = Modifier::empty();
-                    themed_style.sub_modifier = Modifier::empty();
-                }
-                // Resolve bg first so the collision check below sees it.
-                if let Some(bg_key) = bg_theme {
-                    if let Some(color) = ctx.theme.resolve_theme_key(bg_key) {
-                        themed_style = themed_style.bg(color);
-                    }
-                    let m = ctx.theme.resolve_modifier_key(bg_key);
-                    if !m.is_empty() {
-                        themed_style = themed_style.add_modifier(m);
-                    }
-                }
-                let collides = {
-                    let new_bg = themed_style.bg.or(acc.style.bg);
-                    matches!((acc.style.fg, new_bg), (Some(f), Some(b)) if f == b)
-                };
-                // A collision foreground is a legibility fallback, so an
-                // injected cell keeps it. The band's literal colour stands in
-                // when no `fg_theme` key resolves below.
-                if *fg_on_collision_only && collides {
-                    themed_style.fg = fallback_style.fg;
-                }
-                if let Some(fg_key) = fg_theme {
-                    if let Some(color) = ctx.theme.resolve_theme_key(fg_key) {
-                        let apply = if *fg_on_collision_only {
-                            collides
-                        } else {
-                            !is_styled_inline_cell
-                        };
-                        if apply {
-                            themed_style = themed_style
-                                .fg(color)
-                                .add_modifier(ctx.theme.resolve_modifier_key(fg_key));
-                        }
-                    }
-                }
-                // Keep the text legible over the band we just painted. Only
-                // the cells that would actually go unreadable are touched, and
-                // each is moved to the nearest palette entry that clears the
-                // ratio, so the syntax colour is nudged rather than replaced.
-                if *fg_on_low_contrast {
-                    let new_bg = themed_style.bg.or(acc.style.bg);
-                    if let (Some(fg), Some(bg)) = (themed_style.fg.or(acc.style.fg), new_bg) {
-                        if let Some(repaired) = crate::view::color_support::repaired_fg(fg, bg) {
-                            themed_style = themed_style.fg(repaired);
-                        }
-                    }
-                }
-                acc.style = acc.style.patch(themed_style);
+        }
+        return;
+    }
+    acc.style = acc.style.patch(*overlay_style);
+    if let Some(key) = overlay.theme_key {
+        acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
+        if overlay_style.bg.is_some() {
+            acc.bg_theme_key = Some(key);
+        }
+        if overlay_style.fg.is_some() {
+            acc.fg_theme_key = Some(key);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_themed_style_overlay(
+    ctx: &CharStyleContext,
+    fallback_style: &Style,
+    fg_theme: &Option<String>,
+    bg_theme: &Option<String>,
+    fg_on_collision_only: &bool,
+    fg_on_low_contrast: &bool,
+    is_styled_inline_cell: bool,
+    acc: &mut StyleAcc,
+) {
+    let mut themed_style = *fallback_style;
+    // An injected cell — a spliced inlay hint or plugin
+    // annotation — takes the band's *ground* and not its ink: the
+    // band's own foreground and attributes belong to the source
+    // character it actually covers. The two legibility rules
+    // below are not ordinary ink, so they still reach such a
+    // cell; losing them is what left a hint unreadable on an
+    // occurrence highlight. Sharing one path with ordinary cells
+    // is what keeps that from coming apart again.
+    if is_styled_inline_cell {
+        themed_style.fg = None;
+        themed_style.add_modifier = Modifier::empty();
+        themed_style.sub_modifier = Modifier::empty();
+    }
+    // Resolve bg first so the collision check below sees it.
+    if let Some(bg_key) = bg_theme {
+        if let Some(color) = ctx.theme.resolve_theme_key(bg_key) {
+            themed_style = themed_style.bg(color);
+        }
+        let m = ctx.theme.resolve_modifier_key(bg_key);
+        if !m.is_empty() {
+            themed_style = themed_style.add_modifier(m);
+        }
+    }
+    let collides = {
+        let new_bg = themed_style.bg.or(acc.style.bg);
+        matches!((acc.style.fg, new_bg), (Some(f), Some(b)) if f == b)
+    };
+    // A collision foreground is a legibility fallback, so an
+    // injected cell keeps it. The band's literal colour stands in
+    // when no `fg_theme` key resolves below.
+    if *fg_on_collision_only && collides {
+        themed_style.fg = fallback_style.fg;
+    }
+    if let Some(fg_key) = fg_theme {
+        if let Some(color) = ctx.theme.resolve_theme_key(fg_key) {
+            let apply = if *fg_on_collision_only {
+                collides
+            } else {
+                !is_styled_inline_cell
+            };
+            if apply {
+                themed_style = themed_style
+                    .fg(color)
+                    .add_modifier(ctx.theme.resolve_modifier_key(fg_key));
             }
         }
     }
+    // Keep the text legible over the band we just painted. Only
+    // the cells that would actually go unreadable are touched, and
+    // each is moved to the nearest palette entry that clears the
+    // ratio, so the syntax colour is nudged rather than replaced.
+    if *fg_on_low_contrast {
+        let new_bg = themed_style.bg.or(acc.style.bg);
+        if let (Some(fg), Some(bg)) = (themed_style.fg.or(acc.style.fg), new_bg) {
+            if let Some(repaired) = crate::view::color_support::repaired_fg(fg, bg) {
+                themed_style = themed_style.fg(repaired);
+            }
+        }
+    }
+    acc.style = acc.style.patch(themed_style);
 }
 
 /// Apply current line background highlight (before selection, so selection overrides it).
