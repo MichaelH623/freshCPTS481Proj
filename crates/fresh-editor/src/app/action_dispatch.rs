@@ -327,6 +327,70 @@ impl Editor {
             && self.handle_composite_action(buffer_id, action).is_some()
     }
 
+    // helper to replace branch PluginAction
+    fn dispatch_plugin_action(&mut self, action_name: String) {
+        tracing::debug!("handle_action: PluginAction('{}')", action_name);
+        // Execute the plugin callback via TypeScript plugin thread
+        // Use non-blocking version to avoid deadlock with async plugin ops
+        #[cfg(feature = "plugins")]
+        {
+            // A mode binding's handler reads which control has focus
+            // (`getPanelFocusKey`); it must read the host's answer as
+            // of this key, not the last full snapshot's.
+            self.publish_panel_focus();
+            // Likewise the rest of its state: a key handled earlier in
+            // the same input batch (adding a cursor, moving the
+            // selection) must be visible to `getAllCursors()` and the
+            // like, or the handler acts on the frame before (#3666).
+            // A no-op when nothing changed since the last rebuild.
+            self.refresh_plugin_state_snapshot();
+            // A macro replay step runs as an answerable call, so the
+            // replay learns when the handler has settled.
+            let request_id = self.macro_replay.as_ref().and_then(|r| r.dispatch_request);
+            // A keystroke in a plugin's input mode is also answerable:
+            // the keys after it wait until it settles (#3796).
+            let key_hold_request = request_id
+                .is_none()
+                .then(|| self.plugin_key_hold_request())
+                .flatten();
+            let result = self.plugin_manager.read().unwrap().execute_action_async(
+                &action_name,
+                None,
+                request_id.or(key_hold_request),
+            );
+            if let Some(result) = result {
+                match result {
+                    Ok(receiver) => {
+                        if let Some(replay) = self.macro_replay.as_mut() {
+                            replay.dispatch_request = None;
+                        }
+                        if let Some(id) = key_hold_request {
+                            self.begin_plugin_key_hold(id);
+                        }
+                        // Store pending action for processing in main loop
+                        self.pending_plugin_actions
+                            .push((action_name.clone(), receiver));
+                    }
+                    Err(e) => {
+                        self.set_status_message(
+                            t!("view.plugin_error", error = e.to_string()).to_string(),
+                        );
+                        tracing::error!("Plugin action error: {}", e);
+                    }
+                }
+            } else {
+                self.set_status_message(t!("status.plugin_manager_unavailable").to_string());
+            }
+        }
+        #[cfg(not(feature = "plugins"))]
+        {
+            let _ = action_name;
+            self.set_status_message(
+                "Plugins not available (compiled without plugin support)".to_string(),
+            );
+        }
+    }
+
     /// Handle an action (for normal mode and command execution).
     /// Used by the app module internally and by the GUI module for native menu dispatch.
     pub(crate) fn handle_action(&mut self, action: Action) -> AnyhowResult<()> {
@@ -1449,70 +1513,7 @@ impl Editor {
                     }
                 }
             }
-            Action::PluginAction(action_name) => {
-                tracing::debug!("handle_action: PluginAction('{}')", action_name);
-                // Execute the plugin callback via TypeScript plugin thread
-                // Use non-blocking version to avoid deadlock with async plugin ops
-                #[cfg(feature = "plugins")]
-                {
-                    // A mode binding's handler reads which control has focus
-                    // (`getPanelFocusKey`); it must read the host's answer as
-                    // of this key, not the last full snapshot's.
-                    self.publish_panel_focus();
-                    // Likewise the rest of its state: a key handled earlier in
-                    // the same input batch (adding a cursor, moving the
-                    // selection) must be visible to `getAllCursors()` and the
-                    // like, or the handler acts on the frame before (#3666).
-                    // A no-op when nothing changed since the last rebuild.
-                    self.refresh_plugin_state_snapshot();
-                    // A macro replay step runs as an answerable call, so the
-                    // replay learns when the handler has settled.
-                    let request_id = self.macro_replay.as_ref().and_then(|r| r.dispatch_request);
-                    // A keystroke in a plugin's input mode is also answerable:
-                    // the keys after it wait until it settles (#3796).
-                    let key_hold_request = request_id
-                        .is_none()
-                        .then(|| self.plugin_key_hold_request())
-                        .flatten();
-                    let result = self.plugin_manager.read().unwrap().execute_action_async(
-                        &action_name,
-                        None,
-                        request_id.or(key_hold_request),
-                    );
-                    if let Some(result) = result {
-                        match result {
-                            Ok(receiver) => {
-                                if let Some(replay) = self.macro_replay.as_mut() {
-                                    replay.dispatch_request = None;
-                                }
-                                if let Some(id) = key_hold_request {
-                                    self.begin_plugin_key_hold(id);
-                                }
-                                // Store pending action for processing in main loop
-                                self.pending_plugin_actions
-                                    .push((action_name.clone(), receiver));
-                            }
-                            Err(e) => {
-                                self.set_status_message(
-                                    t!("view.plugin_error", error = e.to_string()).to_string(),
-                                );
-                                tracing::error!("Plugin action error: {}", e);
-                            }
-                        }
-                    } else {
-                        self.set_status_message(
-                            t!("status.plugin_manager_unavailable").to_string(),
-                        );
-                    }
-                }
-                #[cfg(not(feature = "plugins"))]
-                {
-                    let _ = action_name;
-                    self.set_status_message(
-                        "Plugins not available (compiled without plugin support)".to_string(),
-                    );
-                }
-            }
+            Action::PluginAction(action_name) => self.dispatch_plugin_action(action_name),
             Action::LoadPluginFromBuffer => {
                 #[cfg(feature = "plugins")]
                 if let Some(path) = self.saved_plugin_file() {
