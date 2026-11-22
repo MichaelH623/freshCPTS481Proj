@@ -320,6 +320,13 @@ impl Editor {
         Ok(())
     }
 
+    // helper for SmartHome, SlecteSmartHome, MoveTOIndenation
+    fn composite_view_handled(&mut self, action: &Action) -> bool {
+        let buffer_id = self.active_buffer();
+        self.active_window().is_composite_buffer(buffer_id)
+            && self.handle_composite_action(buffer_id, action).is_some()
+    }
+
     /// Handle an action (for normal mode and command execution).
     /// Used by the app module internally and by the GUI module for native menu dispatch.
     pub(crate) fn handle_action(&mut self, action: Action) -> AnyhowResult<()> {
@@ -1255,39 +1262,24 @@ impl Editor {
 
             Action::SmartHome => {
                 // In composite (diff) views, use LineStart movement
-                let buffer_id = self.active_buffer();
-                if self.active_window().is_composite_buffer(buffer_id) {
-                    if let Some(_handled) =
-                        self.handle_composite_action(buffer_id, &Action::SmartHome)
-                    {
-                        return Ok(());
-                    }
+                if self.composite_view_handled(&Action::SmartHome) {
+                    return Ok(());
                 }
                 self.smart_home(false);
             }
             Action::SelectSmartHome => {
                 // Composite (diff) views have no smart variant of the plain
                 // selection either; they select to the line start.
-                let buffer_id = self.active_buffer();
-                if self.active_window().is_composite_buffer(buffer_id) {
-                    if let Some(_handled) =
-                        self.handle_composite_action(buffer_id, &Action::SelectSmartHome)
-                    {
-                        return Ok(());
-                    }
+                if self.composite_view_handled(&Action::SelectSmartHome) {
+                    return Ok(());
                 }
                 self.smart_home(true);
             }
             Action::MoveToIndentation => {
                 // Composite (diff) views have no indentation-aware movement;
                 // they move to the line start, as smart_home does there.
-                let buffer_id = self.active_buffer();
-                if self.active_window().is_composite_buffer(buffer_id) {
-                    if let Some(_handled) =
-                        self.handle_composite_action(buffer_id, &Action::MoveToIndentation)
-                    {
-                        return Ok(());
-                    }
+                if self.composite_view_handled(&Action::MoveToIndentation) {
+                    return Ok(());
                 }
                 self.move_to_indentation();
             }
