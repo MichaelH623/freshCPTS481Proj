@@ -108,11 +108,7 @@ impl Editor {
         self.clear_active_view_pin_and_resync(|tab| tab.line_wrap_override = None);
         self.persist_config_change(crate::config_keys::EDITOR_LINE_WRAP, new_value);
 
-        let state = if self.config.editor.line_wrap {
-            t!("view.state_enabled").to_string()
-        } else {
-            t!("view.state_disabled").to_string()
-        };
+        let state_str = Self::on_off_label(is_now_read_only);
         self.set_status_message(t!("view.line_wrap_state", state = state).to_string());
     }
 
@@ -131,11 +127,7 @@ impl Editor {
             new_value,
         );
 
-        let state = if self.config.editor.highlight_current_line {
-            t!("view.state_enabled").to_string()
-        } else {
-            t!("view.state_disabled").to_string()
-        };
+        let state = Self::on_off_label(self.config.editor.line_wrap);
         self.set_status_message(
             t!("view.current_line_highlight_state", state = state).to_string(),
         );
@@ -183,14 +175,80 @@ impl Editor {
             new_value,
         );
 
-        let state = if new_value {
-            t!("view.state_enabled").to_string()
-        } else {
-            t!("view.state_disabled").to_string()
-        };
+        let state = Self::on_off_label(self.config.editor.highlight_current_line);
         self.set_status_message(
             t!("view.occurrence_highlight_state", state = state).to_string(),
         );
+    }
+
+    // The enabled/disabled word toggles what in their status message
+    fn on_off_label(enabled: bool) -> String {
+        if enabled {
+            t!("view.state_enabled").to_string()
+        } else {
+            t!("view.state_disabled").to_string()
+        }
+    }
+
+    // Master switch for the active buffer's whitespace indicators
+    fn toggle_whitespace_indicators(&mut self) {
+        let __buffer_id = self.active_buffer();
+        // Resolve the buffer's configured visibility up front: turning
+        // the master toggle back on shows every space indicator plus
+        // the tab and line-ending indicators the user actually
+        // configured, rather than the hard-coded default. Fixes #2579.
+        let configured = self.configured_whitespace_visibility(__buffer_id);
+        if let Some(state) = self
+            .windows
+            .get_mut(&self.active_window)
+            .map(|w| &mut w.buffers)
+            .expect("active window present")
+            .get_mut(&__buffer_id)
+        {
+            state.buffer_settings.whitespace.toggle_all(configured);
+            let visible = state.buffer_settings.whitespace.any_visible();
+            state.buffer_settings.whitespace_override = Some(visible);
+            // The master toggle answers "any indicators at all?", so
+            // it subsumes a finer tab pin: "hide whitespace
+            // indicators" hiding everything *except* pinned arrows
+            // would make the master appear broken.
+            state.buffer_settings.tab_indicators_override = None;
+            let status = if visible {
+                t!("toggle.whitespace_indicators_shown")
+            } else {
+                t!("toggle.whitespace_indicators_hidden")
+            };
+            self.set_status_message(status.to_string());
+        }
+    }
+
+    // Show or hide only the tab arrow indicator on the active buffer
+    fn toggle_tab_indicators(&mut self) {
+        let __buffer_id = self.active_buffer();
+        if let Some(state) = self
+            .windows
+            .get_mut(&self.active_window)
+            .map(|w| &mut w.buffers)
+            .expect("active window present")
+            .get_mut(&__buffer_id)
+        {
+            // Only the tab-arrow trio: the command's description has
+            // always promised "tab arrow indicators (→)", but it used
+            // to share the master toggle-all with Whitespace
+            // Indicators and flipped the space dots too.
+            let ws = &mut state.buffer_settings.whitespace;
+            let new_value = !(ws.tabs_leading || ws.tabs_inner || ws.tabs_trailing);
+            ws.tabs_leading = new_value;
+            ws.tabs_inner = new_value;
+            ws.tabs_trailing = new_value;
+            state.buffer_settings.tab_indicators_override = Some(new_value);
+            let status = if new_value {
+                t!("toggle.tab_indicators_shown")
+            } else {
+                t!("toggle.tab_indicators_hidden")
+            };
+            self.set_status_message(status.to_string());
+        }
     }
 
     /// Handle an action (for normal mode and command execution).
@@ -766,11 +824,7 @@ impl Editor {
                 self.active_window_mut()
                     .mark_buffer_read_only(buffer_id, is_now_read_only);
 
-                let state_str = if is_now_read_only {
-                    t!("view.state_enabled").to_string()
-                } else {
-                    t!("view.state_disabled").to_string()
-                };
+                let state = Self::on_off_label(new_value);
                 self.set_status_message(t!("view.read_only_state", state = state_str).to_string());
             }
             Action::TogglePageView => {
@@ -1077,63 +1131,8 @@ impl Editor {
                     self.set_status_message(status.to_string());
                 }
             }
-            Action::ToggleWhitespaceIndicators => {
-                let __buffer_id = self.active_buffer();
-                // Resolve the buffer's configured visibility up front: turning
-                // the master toggle back on shows every space indicator plus
-                // the tab and line-ending indicators the user actually
-                // configured, rather than the hard-coded default. Fixes #2579.
-                let configured = self.configured_whitespace_visibility(__buffer_id);
-                if let Some(state) = self
-                    .windows
-                    .get_mut(&self.active_window)
-                    .map(|w| &mut w.buffers)
-                    .expect("active window present")
-                    .get_mut(&__buffer_id)
-                {
-                    state.buffer_settings.whitespace.toggle_all(configured);
-                    let visible = state.buffer_settings.whitespace.any_visible();
-                    state.buffer_settings.whitespace_override = Some(visible);
-                    // The master toggle answers "any indicators at all?", so
-                    // it subsumes a finer tab pin: "hide whitespace
-                    // indicators" hiding everything *except* pinned arrows
-                    // would make the master appear broken.
-                    state.buffer_settings.tab_indicators_override = None;
-                    let status = if visible {
-                        t!("toggle.whitespace_indicators_shown")
-                    } else {
-                        t!("toggle.whitespace_indicators_hidden")
-                    };
-                    self.set_status_message(status.to_string());
-                }
-            }
-            Action::ToggleTabIndicators => {
-                let __buffer_id = self.active_buffer();
-                if let Some(state) = self
-                    .windows
-                    .get_mut(&self.active_window)
-                    .map(|w| &mut w.buffers)
-                    .expect("active window present")
-                    .get_mut(&__buffer_id)
-                {
-                    // Only the tab-arrow trio: the command's description has
-                    // always promised "tab arrow indicators (→)", but it used
-                    // to share the master toggle-all with Whitespace
-                    // Indicators and flipped the space dots too.
-                    let ws = &mut state.buffer_settings.whitespace;
-                    let new_value = !(ws.tabs_leading || ws.tabs_inner || ws.tabs_trailing);
-                    ws.tabs_leading = new_value;
-                    ws.tabs_inner = new_value;
-                    ws.tabs_trailing = new_value;
-                    state.buffer_settings.tab_indicators_override = Some(new_value);
-                    let status = if new_value {
-                        t!("toggle.tab_indicators_shown")
-                    } else {
-                        t!("toggle.tab_indicators_hidden")
-                    };
-                    self.set_status_message(status.to_string());
-                }
-            }
+            Action::ToggleWhitespaceIndicators => self.toggle_whitespace_indicators(),
+            Action::ToggleTabIndicators => self.toggle_tab_indicators(),
             Action::ResetBufferSettings => self.reset_buffer_settings(),
             Action::FocusFileExplorer => self.focus_file_explorer(),
             Action::FocusEditor => self.active_window_mut().focus_editor(),
