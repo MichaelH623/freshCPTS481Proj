@@ -79,6 +79,24 @@ impl Editor {
         }
     }
 
+    /// Drop the pin "Current Buffer" toggle left on the view in front of the user, then re-resolve every window's display defaults
+    fn clear_active_view_pin_and_resync(&mut self, clear_pin: impl FnOnce(&mut crate::view::split::BufferViewState),) 
+    {
+        let active_split = self.effective_active_split();
+        if let Some(view_state) = self
+            .windows
+            .get_mut(&self.active_window)
+            .and_then(|w| w.buffers.split_view_states_mut())
+            .and_then(|states| states.get_mut(&active_split))
+        {
+            clear_pin(view_state.buffer_tab_state_mut());
+        }
+
+        for window in self.windows.values_mut() {
+            window.resync_global_display_defaults();
+        }
+    }
+
     // Flip the editor-wide `line_wrap` default and save it to the user config
     // helper method for handle_action 
     fn toggle_global_line_wrap(&mut self) {
@@ -87,20 +105,7 @@ impl Editor {
 
         self.sync_windows_config();
 
-        let active_split = self.effective_active_split();
-        if let Some(view_state) = self
-            .windows
-            .get_mut(&self.active_window)
-            .and_then(|w| w.buffers.split_view_states_mut())
-            .and_then(|states| states.get_mut(&active_split))
-        {
-            view_state.buffer_tab_state_mut().line_wrap_override = None;
-        }
-
-        for window in self.windows.values_mut() {
-            window.resync_global_display_defaults();
-        }
-
+        self.clear_active_view_pin_and_resync(|tab| tab.line_wrap_override = None);
         self.persist_config_change(crate::config_keys::EDITOR_LINE_WRAP, new_value);
 
         let state = if self.config.editor.line_wrap {
@@ -119,21 +124,7 @@ impl Editor {
         self.sync_windows_config();
 
         // Only this view's pin is dropped as in toggle_global_line_wrap
-        let active_split = self.effective_active_split();
-        if let Some(view_state) = self
-            .windows
-            .get_mut(&self.active_window)
-            .and_then(|w| w.buffers.split_view_states_mut())
-            .and_then(|states| states.get_mut(&active_split))
-        {
-            view_state
-                .buffer_tab_state_mut()
-                .highlight_current_line_override = None;
-        }
-
-        for window in self.windows.values_mut() {
-            window.resync_global_display_defaults();
-        }
+        self.clear_active_view_pin_and_resync(|tab| tab.highlight_current_line_override = None);
 
         self.persist_config_change(
             crate::config_keys::EDITOR_HIGHLIGHT_CURRENT_LINE,
