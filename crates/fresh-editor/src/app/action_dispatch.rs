@@ -143,13 +143,7 @@ impl Editor {
         // Update all open buffers
         // A buffer the user pinned with the "Current Buffer" variant keeps its choice 
         // except the active one, whose pin is cleared first as a global intent
-        if let Some(state) = self
-            .windows
-            .get_mut(&self.active_window)
-            .map(|w| &mut w.buffers)
-            .expect("active window present")
-            .get_mut(&active_buffer)
-        {
+        if let Some(state) = self.buffers_mut().get_mut(&active_buffer) {
             state.buffer_settings.highlight_occurrences_override = None;
         }
         for window in self.windows.values_mut() {
@@ -198,13 +192,7 @@ impl Editor {
         // the tab and line-ending indicators the user actually
         // configured, rather than the hard-coded default. Fixes #2579.
         let configured = self.configured_whitespace_visibility(__buffer_id);
-        if let Some(state) = self
-            .windows
-            .get_mut(&self.active_window)
-            .map(|w| &mut w.buffers)
-            .expect("active window present")
-            .get_mut(&__buffer_id)
-        {
+        if let Some(state) = self.buffers_mut().get_mut(&__buffer_id) {
             state.buffer_settings.whitespace.toggle_all(configured);
             let visible = state.buffer_settings.whitespace.any_visible();
             state.buffer_settings.whitespace_override = Some(visible);
@@ -225,13 +213,7 @@ impl Editor {
     // Show or hide only the tab arrow indicator on the active buffer
     fn toggle_tab_indicators(&mut self) {
         let __buffer_id = self.active_buffer();
-        if let Some(state) = self
-            .windows
-            .get_mut(&self.active_window)
-            .map(|w| &mut w.buffers)
-            .expect("active window present")
-            .get_mut(&__buffer_id)
-        {
+        if let Some(state) = self.buffers_mut().get_mut(&__buffer_id) {
             // Only the tab-arrow trio: the command's description has
             // always promised "tab arrow indicators (→)", but it used
             // to share the master toggle-all with Whitespace
@@ -248,6 +230,76 @@ impl Editor {
                 t!("toggle.tab_indicators_hidden")
             };
             self.set_status_message(status.to_string());
+        }
+    }
+
+    // Moved Action::Copy branch to this helper method from handle_action()
+    fn handle_copy_action(&mut self) {
+        // Editor-level popups take precedence over everything, including the file explorer.
+        let popup = self
+            .global_popups
+            .top()
+            .or_else(|| self.active_state().popups.top());
+        if let Some(popup) = popup {
+            if popup.has_selection() {
+                if let Some(text) = popup.get_selected_text() {
+                    self.clipboard.copy(text);
+                    self.set_status_message(t!("clipboard.copied").to_string());
+                    return;
+                }
+            }
+        }
+        if self.active_window_mut().key_context
+            == crate::input::keybindings::KeyContext::FileExplorer
+        {
+            self.active_window_mut().file_explorer_copy();
+            return;
+        }
+        // A focused widget Text input on the active buffer
+        // wins over the underlying buffer's copy path. The
+        // widget's selection lives in its TextEdit; this
+        // bypasses `is_editing_disabled` because widget
+        // inputs are independent of the underlying virtual
+        // buffer's read-only-ness.
+        let buffer_id = self.active_buffer();
+        if let Some(panel_id) = self.focused_text_widget_panel_for_buffer(buffer_id) {
+            if self.handle_widget_copy(&panel_id) {
+                self.set_status_message(t!("clipboard.copied").to_string());
+                return;
+            }
+        }
+        // Check if active buffer is a composite buffer
+        if self.active_window().is_composite_buffer(buffer_id) {
+            if let Some(_handled) = self.handle_composite_action(buffer_id, &Action::Copy) {
+                return;
+            }
+        }
+        // Copying the selection completes a drag-to-select gesture on
+        // a live terminal grid: the split was only parked in implicit
+        // (drag-initiated) scrollback so the selection could exist,
+        // and the copy is the gesture's natural end — resume the live
+        // grid. Explicit scrollback visits (Ctrl+Space, Shift+PageUp,
+        // wheel) are never resumed by a copy: the user chose a stable
+        // reading view and yanking it to the bottom would lose their
+        // place.
+        let resume_terminal = {
+            let win = self.active_window();
+            let split = win.effective_active_split();
+            win.split_terminal_drag_scrollback(split, buffer_id)
+                && win
+                    .buffers
+                    .splits()
+                    .and_then(|(_, vs)| vs.get(&split))
+                    .is_some_and(|vs| {
+                        vs.buffer_tab_state().cursors.iter().any(|(_, c)| {
+                            c.selection_range().is_some() || c.has_block_selection()
+                        })
+                    })
+        };
+        self.copy_selection();
+        if resume_terminal {
+            self.enter_terminal_mode();
+            self.set_status_message("Copied - terminal resumed".to_string());
         }
     }
 
@@ -557,74 +609,7 @@ impl Editor {
                     }
                 }
             }
-            Action::Copy => {
-                // Editor-level popups take precedence over everything, including the file explorer.
-                let popup = self
-                    .global_popups
-                    .top()
-                    .or_else(|| self.active_state().popups.top());
-                if let Some(popup) = popup {
-                    if popup.has_selection() {
-                        if let Some(text) = popup.get_selected_text() {
-                            self.clipboard.copy(text);
-                            self.set_status_message(t!("clipboard.copied").to_string());
-                            return Ok(());
-                        }
-                    }
-                }
-                if self.active_window_mut().key_context
-                    == crate::input::keybindings::KeyContext::FileExplorer
-                {
-                    self.active_window_mut().file_explorer_copy();
-                    return Ok(());
-                }
-                // A focused widget Text input on the active buffer
-                // wins over the underlying buffer's copy path. The
-                // widget's selection lives in its TextEdit; this
-                // bypasses `is_editing_disabled` because widget
-                // inputs are independent of the underlying virtual
-                // buffer's read-only-ness.
-                let buffer_id = self.active_buffer();
-                if let Some(panel_id) = self.focused_text_widget_panel_for_buffer(buffer_id) {
-                    if self.handle_widget_copy(&panel_id) {
-                        self.set_status_message(t!("clipboard.copied").to_string());
-                        return Ok(());
-                    }
-                }
-                // Check if active buffer is a composite buffer
-                if self.active_window().is_composite_buffer(buffer_id) {
-                    if let Some(_handled) = self.handle_composite_action(buffer_id, &Action::Copy) {
-                        return Ok(());
-                    }
-                }
-                // Copying the selection completes a drag-to-select gesture on
-                // a live terminal grid: the split was only parked in implicit
-                // (drag-initiated) scrollback so the selection could exist,
-                // and the copy is the gesture's natural end — resume the live
-                // grid. Explicit scrollback visits (Ctrl+Space, Shift+PageUp,
-                // wheel) are never resumed by a copy: the user chose a stable
-                // reading view and yanking it to the bottom would lose their
-                // place.
-                let resume_terminal = {
-                    let win = self.active_window();
-                    let split = win.effective_active_split();
-                    win.split_terminal_drag_scrollback(split, buffer_id)
-                        && win
-                            .buffers
-                            .splits()
-                            .and_then(|(_, vs)| vs.get(&split))
-                            .is_some_and(|vs| {
-                                vs.buffer_tab_state().cursors.iter().any(|(_, c)| {
-                                    c.selection_range().is_some() || c.has_block_selection()
-                                })
-                            })
-                };
-                self.copy_selection();
-                if resume_terminal {
-                    self.enter_terminal_mode();
-                    self.set_status_message("Copied - terminal resumed".to_string());
-                }
-            }
+            Action::Copy => self.handle_copy_action(),
             Action::CopyWithTheme(theme) => self.copy_selection_with_theme(&theme),
             Action::CopyFilePath => self.copy_active_buffer_path(false),
             Action::CopyRelativeFilePath => self.copy_active_buffer_path(true),
@@ -1109,13 +1094,7 @@ impl Editor {
             }
             Action::ToggleIndentationStyle => {
                 let __buffer_id = self.active_buffer();
-                if let Some(state) = self
-                    .windows
-                    .get_mut(&self.active_window)
-                    .map(|w| &mut w.buffers)
-                    .expect("active window present")
-                    .get_mut(&__buffer_id)
-                {
+                if let Some(state) = self.buffers_mut().get_mut(&__buffer_id) {
                     let new_value = !state.buffer_settings.use_tabs;
                     state.buffer_settings.use_tabs = new_value;
                     // Record the explicit override so a later `apply_config`
