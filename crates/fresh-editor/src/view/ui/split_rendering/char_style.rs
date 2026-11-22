@@ -90,10 +90,46 @@ fn overlay_has_own_bg(overlay: &Overlay, theme: &Theme) -> bool {
     bg.is_some_and(|c| c != Color::Reset)
 }
 
+/// Style state built up layer by layer by [`compute_char_style`], together
+/// with the theme keys and region label that produced it (theme inspector
+/// provenance).
+struct StyleAcc {
+    style: Style,
+    fg_theme_key: Option<&'static str>,
+    bg_theme_key: Option<&'static str>,
+    region: &'static str,
+}
+
+impl StyleAcc {
+    fn into_output(self, is_secondary_cursor: bool) -> CharStyleOutput {
+        CharStyleOutput {
+            style: self.style,
+            is_secondary_cursor,
+            fg_theme_key: self.fg_theme_key,
+            bg_theme_key: self.bg_theme_key,
+            region: self.region,
+        }
+    }
+}
+
 /// Compute the style for a character by layering:
 /// token -> ANSI -> syntax -> semantic -> overlays -> selection -> cursor.
 /// Also tracks which theme keys produced the final fg/bg colors.
 pub(super) fn compute_char_style(ctx: &CharStyleContext) -> CharStyleOutput {
+    let mut acc = base_style(ctx);
+    apply_syntax(ctx, &mut acc);
+    apply_semantic(ctx, &mut acc);
+    apply_overlays(ctx, &mut acc);
+    apply_current_line(ctx, &mut acc);
+    apply_selection(ctx, &mut acc);
+    let is_secondary_cursor = apply_cursor(ctx, &mut acc);
+    apply_ground_attrs(ctx, &mut acc);
+    acc.into_output(is_secondary_cursor)
+}
+
+/// Start with token style if present (for injected content like annotation
+/// headers). Otherwise use ANSI/syntax/theme default.
+fn base_style(ctx: &CharStyleContext) -> StyleAcc {
     let highlight_color = ctx.highlight_color;
 
     // Track theme key provenance alongside style
@@ -101,9 +137,7 @@ pub(super) fn compute_char_style(ctx: &CharStyleContext) -> CharStyleOutput {
     let mut bg_theme_key: Option<&'static str> = Some("editor.bg");
     let mut region: &'static str = "Editor Content";
 
-    // Start with token style if present (for injected content like annotation headers)
-    // Otherwise use ANSI/syntax/theme default
-    let mut style = if let Some(ts) = ctx.token_style {
+    let style = if let Some(ts) = ctx.token_style {
         let mut s = Style::default();
         if let Some(ref fg) = ts.fg {
             s = s.fg(fg.to_ratatui(ctx.theme));
@@ -160,14 +194,28 @@ pub(super) fn compute_char_style(ctx: &CharStyleContext) -> CharStyleOutput {
             .add_modifier(ground_attrs(ctx.theme, "editor.fg"))
     };
 
+    StyleAcc {
+        style,
+        fg_theme_key,
+        bg_theme_key,
+        region,
+    }
+}
+
+/// Apply the syntax-highlighting layer on top of the base style: the syntax
+/// foreground, the syntax category's font attributes, and the syntax-driven
+/// (diff) background.
+fn apply_syntax(ctx: &CharStyleContext, acc: &mut StyleAcc) {
+    let highlight_color = ctx.highlight_color;
+
     // If we have ANSI style but also syntax highlighting, syntax takes precedence for color
     // (unless ANSI has explicit color which we already applied above)
     if let Some(color) = highlight_color {
         if ctx.ansi_style.fg.is_none()
             && (ctx.ansi_style.bg.is_some() || !ctx.ansi_style.add_modifier.is_empty())
         {
-            style = style.fg(color);
-            fg_theme_key = ctx.highlight_theme_key;
+            acc.style = acc.style.fg(color);
+            acc.fg_theme_key = ctx.highlight_theme_key;
         }
     }
 
@@ -176,7 +224,7 @@ pub(super) fn compute_char_style(ctx: &CharStyleContext) -> CharStyleOutput {
     // the syntax modifier when an LSP semantic token later refines the color.
     if ctx.token_style.is_none() && highlight_color.is_some() {
         if let Some(key) = ctx.highlight_theme_key {
-            style = style.add_modifier(ctx.theme.resolve_modifier_key(key));
+            acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
         }
     }
 
@@ -186,29 +234,32 @@ pub(super) fn compute_char_style(ctx: &CharStyleContext) -> CharStyleOutput {
     // `addOverlay` from a plugin can still paint over the diff
     // colour) but ABOVE ANSI bg (so the syntax intent wins).
     if let Some(bg) = ctx.highlight_bg {
-        style = style.bg(bg);
+        acc.style = acc.style.bg(bg);
         if let Some(key) = ctx.highlight_bg_theme_key {
-            bg_theme_key = Some(key);
-            style = style.add_modifier(ctx.theme.resolve_modifier_key(key));
+            acc.bg_theme_key = Some(key);
+            acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
         }
     }
+}
 
-    // Apply LSP semantic token foreground color when no custom token style is set.
+/// Apply LSP semantic token foreground color when no custom token style is set.
+fn apply_semantic(ctx: &CharStyleContext, acc: &mut StyleAcc) {
     if ctx.token_style.is_none() {
         if let Some(color) = ctx.semantic_token_color {
-            style = style.fg(color);
+            acc.style = acc.style.fg(color);
             // Semantic tokens don't have a single static key; leave fg_theme_key as-is
             // (the syntax highlight key is a reasonable approximation)
         }
     }
+}
 
+/// Apply overlay styles — last overlay wins for each attribute.
+fn apply_overlays(ctx: &CharStyleContext, acc: &mut StyleAcc) {
     // Styled cells without a source byte are inline virtual text (inlay hints
     // and plugin annotations). They borrow an adjacent source cell's overlays
     // so background bands stay continuous, but ordinary overlay ink belongs to
     // the source text. Legibility fallbacks are handled separately below.
     let is_styled_inline_cell = ctx.byte_pos.is_none() && ctx.token_style.is_some();
-
-    // Apply overlay styles — last overlay wins for each attribute
     for overlay in ctx.active_overlays {
         match &overlay.face {
             OverlayFace::Underline {
@@ -218,22 +269,22 @@ pub(super) fn compute_char_style(ctx: &CharStyleContext) -> CharStyleOutput {
                 if is_styled_inline_cell {
                     continue;
                 }
-                style = style.add_modifier(Modifier::UNDERLINED).fg(*color);
+                acc.style = acc.style.add_modifier(Modifier::UNDERLINED).fg(*color);
                 if let Some(key) = overlay.theme_key {
-                    fg_theme_key = Some(key);
-                    style = style.add_modifier(ctx.theme.resolve_modifier_key(key));
+                    acc.fg_theme_key = Some(key);
+                    acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
                 }
             }
             OverlayFace::Background { color } => {
-                style = style.bg(*color);
+                acc.style = acc.style.bg(*color);
                 if let Some(key) = overlay.theme_key {
-                    bg_theme_key = Some(key);
+                    acc.bg_theme_key = Some(key);
                     // Pick up any SGR modifier the theme associates with
                     // this bg slot (e.g. terminal-adaptive themes ship
                     // `Reversed` for `ui.semantic_highlight_bg`).
                     let m = ctx.theme.resolve_modifier_key(key);
                     if !m.is_empty() {
-                        style = style.add_modifier(m);
+                        acc.style = acc.style.add_modifier(m);
                     }
                 }
             }
@@ -241,10 +292,10 @@ pub(super) fn compute_char_style(ctx: &CharStyleContext) -> CharStyleOutput {
                 if is_styled_inline_cell {
                     continue;
                 }
-                style = style.fg(*color);
+                acc.style = acc.style.fg(*color);
                 if let Some(key) = overlay.theme_key {
-                    fg_theme_key = Some(key);
-                    style = style.add_modifier(ctx.theme.resolve_modifier_key(key));
+                    acc.fg_theme_key = Some(key);
+                    acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
                 }
             }
             OverlayFace::Style {
@@ -252,22 +303,22 @@ pub(super) fn compute_char_style(ctx: &CharStyleContext) -> CharStyleOutput {
             } => {
                 if is_styled_inline_cell {
                     if let Some(bg) = overlay_style.bg {
-                        style = style.bg(bg);
+                        acc.style = acc.style.bg(bg);
                         if let Some(key) = overlay.theme_key {
-                            bg_theme_key = Some(key);
-                            style = style.add_modifier(ctx.theme.resolve_modifier_key(key));
+                            acc.bg_theme_key = Some(key);
+                            acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
                         }
                     }
                     continue;
                 }
-                style = style.patch(*overlay_style);
+                acc.style = acc.style.patch(*overlay_style);
                 if let Some(key) = overlay.theme_key {
-                    style = style.add_modifier(ctx.theme.resolve_modifier_key(key));
+                    acc.style = acc.style.add_modifier(ctx.theme.resolve_modifier_key(key));
                     if overlay_style.bg.is_some() {
-                        bg_theme_key = Some(key);
+                        acc.bg_theme_key = Some(key);
                     }
                     if overlay_style.fg.is_some() {
-                        fg_theme_key = Some(key);
+                        acc.fg_theme_key = Some(key);
                     }
                 }
             }
@@ -303,8 +354,8 @@ pub(super) fn compute_char_style(ctx: &CharStyleContext) -> CharStyleOutput {
                     }
                 }
                 let collides = {
-                    let new_bg = themed_style.bg.or(style.bg);
-                    matches!((style.fg, new_bg), (Some(f), Some(b)) if f == b)
+                    let new_bg = themed_style.bg.or(acc.style.bg);
+                    matches!((acc.style.fg, new_bg), (Some(f), Some(b)) if f == b)
                 };
                 // A collision foreground is a legibility fallback, so an
                 // injected cell keeps it. The band's literal colour stands in
@@ -331,36 +382,41 @@ pub(super) fn compute_char_style(ctx: &CharStyleContext) -> CharStyleOutput {
                 // each is moved to the nearest palette entry that clears the
                 // ratio, so the syntax colour is nudged rather than replaced.
                 if *fg_on_low_contrast {
-                    let new_bg = themed_style.bg.or(style.bg);
-                    if let (Some(fg), Some(bg)) = (themed_style.fg.or(style.fg), new_bg) {
+                    let new_bg = themed_style.bg.or(acc.style.bg);
+                    if let (Some(fg), Some(bg)) = (themed_style.fg.or(acc.style.fg), new_bg) {
                         if let Some(repaired) = crate::view::color_support::repaired_fg(fg, bg) {
                             themed_style = themed_style.fg(repaired);
                         }
                     }
                 }
-                style = style.patch(themed_style);
+                acc.style = acc.style.patch(themed_style);
             }
         }
     }
+}
 
-    // Apply current line background highlight (before selection, so selection overrides it)
-    if ctx.is_cursor_line_highlighted && !ctx.is_selected && style.bg.is_none() {
-        style = style
+/// Apply current line background highlight (before selection, so selection overrides it).
+fn apply_current_line(ctx: &CharStyleContext, acc: &mut StyleAcc) {
+    if ctx.is_cursor_line_highlighted && !ctx.is_selected && acc.style.bg.is_none() {
+        acc.style = acc
+            .style
             .bg(ctx.current_line_bg)
             .add_modifier(ground_attrs(ctx.theme, "editor.current_line_bg"));
     }
+}
 
-    // Apply selection highlighting (preserve fg/syntax colors, only change bg).
-    // Themes may also opt into SGR text attributes here (e.g. `Reversed`)
-    // so a native-palette theme can swap fg/bg via the terminal instead
-    // of relying on a fixed bg color — see `Theme::selection_modifier`.
-    //
-    // An overlay marked `above_selection` (the current search match, which
-    // Find Next also selects) keeps its own look instead, when it has a
-    // background of its own. One without (a theme whose selection is only
-    // reverse video lends the current match its `Reset` selection
-    // background) is drawn like the selection, selected or not, so it still
-    // stands out.
+/// Apply selection highlighting (preserve fg/syntax colors, only change bg).
+/// Themes may also opt into SGR text attributes here (e.g. `Reversed`)
+/// so a native-palette theme can swap fg/bg via the terminal instead
+/// of relying on a fixed bg color — see `Theme::selection_modifier`.
+///
+/// An overlay marked `above_selection` (the current search match, which
+/// Find Next also selects) keeps its own look instead, when it has a
+/// background of its own. One without (a theme whose selection is only
+/// reverse video lends the current match its `Reset` selection
+/// background) is drawn like the selection, selected or not, so it still
+/// stands out.
+fn apply_selection(ctx: &CharStyleContext, acc: &mut StyleAcc) {
     let (above_with_bg, above_without_bg) = ctx
         .active_overlays
         .iter()
@@ -374,48 +430,47 @@ pub(super) fn compute_char_style(ctx: &CharStyleContext) -> CharStyleOutput {
         });
     if (ctx.is_selected && !above_with_bg) || above_without_bg {
         // `selection_modifier` is `editor.selection_bg`'s attributes.
-        style = style
+        acc.style = acc
+            .style
             .bg(ctx.theme.selection_bg)
             .add_modifier(ctx.theme.selection_modifier);
-        bg_theme_key = Some("editor.selection_bg");
-        region = "Selection";
+        acc.bg_theme_key = Some("editor.selection_bg");
+        acc.region = "Selection";
     }
+}
 
-    // Apply cursor styling.
+/// Apply cursor styling. Returns whether this cell is a secondary cursor.
+fn apply_cursor(ctx: &CharStyleContext, acc: &mut StyleAcc) -> bool {
     let is_secondary_cursor = ctx.is_cursor && ctx.byte_pos != Some(ctx.primary_cursor_position);
     if ctx.is_active {
         if ctx.is_cursor {
             if ctx.skip_primary_cursor_reverse {
                 if is_secondary_cursor {
-                    style = style.add_modifier(Modifier::REVERSED);
+                    acc.style = acc.style.add_modifier(Modifier::REVERSED);
                 }
             } else {
-                style = style.add_modifier(Modifier::REVERSED);
+                acc.style = acc.style.add_modifier(Modifier::REVERSED);
             }
-            region = "Cursor";
+            acc.region = "Cursor";
         }
     } else if ctx.is_cursor {
-        style = style
+        acc.style = acc
+            .style
             .theme_fg(ctx.theme, "editor.fg")
             .theme_bg(ctx.theme, "editor.inactive_cursor");
-        fg_theme_key = Some("editor.fg");
-        bg_theme_key = Some("editor.inactive_cursor");
-        region = "Inactive Cursor";
+        acc.fg_theme_key = Some("editor.fg");
+        acc.bg_theme_key = Some("editor.inactive_cursor");
+        acc.region = "Inactive Cursor";
     }
+    is_secondary_cursor
+}
 
-    // A cell left on the pane's own ground is drawn with `editor.bg`. The
-    // ground itself is painted with colors only, so its attributes go on
-    // exactly these cells, as every other key's go on the cells drawn with it.
-    if bg_theme_key == Some("editor.bg") && style.bg.is_none() {
-        style = style.add_modifier(ground_attrs(ctx.theme, "editor.bg"));
-    }
-
-    CharStyleOutput {
-        style,
-        is_secondary_cursor,
-        fg_theme_key,
-        bg_theme_key,
-        region,
+/// A cell left on the pane's own ground is drawn with `editor.bg`. The
+/// ground itself is painted with colors only, so its attributes go on
+/// exactly these cells, as every other key's go on the cells drawn with it.
+fn apply_ground_attrs(ctx: &CharStyleContext, acc: &mut StyleAcc) {
+    if acc.bg_theme_key == Some("editor.bg") && acc.style.bg.is_none() {
+        acc.style = acc.style.add_modifier(ground_attrs(ctx.theme, "editor.bg"));
     }
 }
 
