@@ -490,22 +490,40 @@ impl<'a> MarkdownRenderer<'a> {
         }
     }
 
+    /// Return the style on top of the style stack, or the default style if empty.
+    fn current_style(&self) -> Style {
+        *self.style_stack.last().unwrap_or(&Style::default())
+    }
+
+    /// Push the current style with `modifier` added onto the style stack.
+    fn push_modifier(&mut self, modifier: Modifier) {
+        let current = self.current_style();
+        self.style_stack.push(current.add_modifier(modifier));
+    }
+
+    /// Start a new line if the last line has content (does nothing when there are no lines).
+    fn start_new_line_if_needed(&mut self) {
+        if !self
+            .lines
+            .last()
+            .map(|l| l.spans.is_empty())
+            .unwrap_or(true)
+        {
+            self.lines.push(StyledLine::new());
+        }
+    }
+
     /// Handle the start of a markdown tag.
     fn start_tag(&mut self, tag: Tag<'_>) {
         match tag {
             Tag::Strong => {
-                let current = *self.style_stack.last().unwrap_or(&Style::default());
-                self.style_stack.push(current.add_modifier(Modifier::BOLD));
+                self.push_modifier(Modifier::BOLD);
             }
             Tag::Emphasis => {
-                let current = *self.style_stack.last().unwrap_or(&Style::default());
-                self.style_stack
-                    .push(current.add_modifier(Modifier::ITALIC));
+                self.push_modifier(Modifier::ITALIC);
             }
             Tag::Strikethrough => {
-                let current = *self.style_stack.last().unwrap_or(&Style::default());
-                self.style_stack
-                    .push(current.add_modifier(Modifier::CROSSED_OUT));
+                self.push_modifier(Modifier::CROSSED_OUT);
             }
             Tag::CodeBlock(kind) => {
                 self.in_code_block = true;
@@ -514,17 +532,10 @@ impl<'a> MarkdownRenderer<'a> {
                     pulldown_cmark::CodeBlockKind::Indented => String::new(),
                 };
                 // Start new line for code block
-                if !self
-                    .lines
-                    .last()
-                    .map(|l| l.spans.is_empty())
-                    .unwrap_or(true)
-                {
-                    self.lines.push(StyledLine::new());
-                }
+                self.start_new_line_if_needed();
             }
             Tag::Heading { .. } => {
-                let current = *self.style_stack.last().unwrap_or(&Style::default());
+                let current = self.current_style();
                 self.style_stack.push(
                     current
                         .add_modifier(Modifier::BOLD)
@@ -532,37 +543,23 @@ impl<'a> MarkdownRenderer<'a> {
                 );
             }
             Tag::Link { dest_url, .. } => {
-                let current = *self.style_stack.last().unwrap_or(&Style::default());
+                let current = self.current_style();
                 self.style_stack
                     .push(current.add_modifier(Modifier::UNDERLINED).fg(Color::Cyan));
                 // Store the link URL for text spans inside this link
                 self.current_link_url = Some(dest_url.to_string());
             }
             Tag::Image { .. } => {
-                let current = *self.style_stack.last().unwrap_or(&Style::default());
+                let current = self.current_style();
                 self.style_stack
                     .push(current.add_modifier(Modifier::UNDERLINED).fg(Color::Cyan));
             }
             Tag::List(start) => {
-                if !self
-                    .lines
-                    .last()
-                    .map(|l| l.spans.is_empty())
-                    .unwrap_or(true)
-                {
-                    self.lines.push(StyledLine::new());
-                }
+                self.start_new_line_if_needed();
                 self.list_stack.push(start);
             }
             Tag::Item => {
-                if !self
-                    .lines
-                    .last()
-                    .map(|l| l.spans.is_empty())
-                    .unwrap_or(true)
-                {
-                    self.lines.push(StyledLine::new());
-                }
+                self.start_new_line_if_needed();
                 // Two columns of indent per nesting level, then the
                 // item marker: `• ` for unordered lists, `N. ` for
                 // ordered ones (advancing the level's counter). NBSP
@@ -577,7 +574,7 @@ impl<'a> MarkdownRenderer<'a> {
                     }
                     _ => format!("{}• ", "\u{00A0}".repeat(depth * 2)),
                 };
-                let style = *self.style_stack.last().unwrap_or(&Style::default());
+                let style = self.current_style();
                 if let Some(line) = self.lines.last_mut() {
                     line.push(marker, style);
                 }
@@ -676,7 +673,7 @@ impl<'a> MarkdownRenderer<'a> {
                 add_text_to_lines(&mut self.lines, &text, code_style, None);
             }
         } else {
-            let current_style = *self.style_stack.last().unwrap_or(&Style::default());
+            let current_style = self.current_style();
             add_text_to_lines(
                 &mut self.lines,
                 &text,
