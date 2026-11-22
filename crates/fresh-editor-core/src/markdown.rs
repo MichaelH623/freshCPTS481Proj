@@ -8,7 +8,7 @@ use crate::primitives::grammar::GrammarRegistry;
 use crate::primitives::highlight_engine::highlight_string;
 use crate::primitives::highlighter::HighlightSpan;
 use crate::theme::ThemeStyle;
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
 
 /// Whether a character is a space-like separator (regular space or NBSP).
@@ -438,6 +438,303 @@ fn preserve_leading_whitespace(text: &str) -> String {
         .join("\n")
 }
 
+/// Mutable rendering state threaded through markdown event handling.
+struct MarkdownRenderer<'a> {
+    theme: &'a crate::theme::Theme,
+    registry: Option<&'a GrammarRegistry>,
+    lines: Vec<StyledLine>,
+    style_stack: Vec<Style>,
+    in_code_block: bool,
+    code_block_lang: String,
+    current_link_url: Option<String>,
+    list_stack: Vec<Option<u64>>,
+}
+
+impl<'a> MarkdownRenderer<'a> {
+    /// Create a renderer with the initial state used by `parse_markdown`.
+    fn new(theme: &'a crate::theme::Theme, registry: Option<&'a GrammarRegistry>) -> Self {
+        Self {
+            theme,
+            registry,
+            lines: vec![StyledLine::new()],
+            // Style stack for nested formatting. Seeded with `popup_text_fg` so
+            // body text carries an explicit fg that reads against `popup_bg`,
+            // instead of inheriting the host terminal's default fg — which on a
+            // dark-terminal host running the light theme paints near-white text
+            // on the near-white popup background. See issue #2033.
+            style_stack: vec![Style::default().theme_fg(theme, "ui.popup_text_fg")],
+            in_code_block: false,
+            code_block_lang: String::new(),
+            // Track current link URL (if inside a link)
+            current_link_url: None,
+            // List nesting. Each level carries the next ordinal for an ordered
+            // list, or `None` for an unordered one, so items render with a
+            // leading `• ` / `N. ` marker indented by depth. Without a marker
+            // a hover doc's `- a` / `- b` collapsed into indistinguishable
+            // plain lines.
+            list_stack: Vec::new(),
+        }
+    }
+
+    /// Dispatch a single markdown event to its handler.
+    fn handle_event(&mut self, event: Event<'_>) {
+        match event {
+            Event::Start(tag) => self.start_tag(tag),
+            Event::End(tag_end) => self.end_tag(tag_end),
+            Event::Text(text) => self.text(text),
+            Event::Code(code) => self.inline_code(code),
+            Event::SoftBreak => self.soft_break(),
+            Event::HardBreak => self.hard_break(),
+            Event::Rule => self.rule(),
+            _ => {}
+        }
+    }
+
+    /// Handle the start of a markdown tag.
+    fn start_tag(&mut self, tag: Tag<'_>) {
+        match tag {
+            Tag::Strong => {
+                let current = *self.style_stack.last().unwrap_or(&Style::default());
+                self.style_stack.push(current.add_modifier(Modifier::BOLD));
+            }
+            Tag::Emphasis => {
+                let current = *self.style_stack.last().unwrap_or(&Style::default());
+                self.style_stack
+                    .push(current.add_modifier(Modifier::ITALIC));
+            }
+            Tag::Strikethrough => {
+                let current = *self.style_stack.last().unwrap_or(&Style::default());
+                self.style_stack
+                    .push(current.add_modifier(Modifier::CROSSED_OUT));
+            }
+            Tag::CodeBlock(kind) => {
+                self.in_code_block = true;
+                self.code_block_lang = match kind {
+                    pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
+                    pulldown_cmark::CodeBlockKind::Indented => String::new(),
+                };
+                // Start new line for code block
+                if !self
+                    .lines
+                    .last()
+                    .map(|l| l.spans.is_empty())
+                    .unwrap_or(true)
+                {
+                    self.lines.push(StyledLine::new());
+                }
+            }
+            Tag::Heading { .. } => {
+                let current = *self.style_stack.last().unwrap_or(&Style::default());
+                self.style_stack.push(
+                    current
+                        .add_modifier(Modifier::BOLD)
+                        .theme_fg(self.theme, "ui.help_key_fg"),
+                );
+            }
+            Tag::Link { dest_url, .. } => {
+                let current = *self.style_stack.last().unwrap_or(&Style::default());
+                self.style_stack
+                    .push(current.add_modifier(Modifier::UNDERLINED).fg(Color::Cyan));
+                // Store the link URL for text spans inside this link
+                self.current_link_url = Some(dest_url.to_string());
+            }
+            Tag::Image { .. } => {
+                let current = *self.style_stack.last().unwrap_or(&Style::default());
+                self.style_stack
+                    .push(current.add_modifier(Modifier::UNDERLINED).fg(Color::Cyan));
+            }
+            Tag::List(start) => {
+                if !self
+                    .lines
+                    .last()
+                    .map(|l| l.spans.is_empty())
+                    .unwrap_or(true)
+                {
+                    self.lines.push(StyledLine::new());
+                }
+                self.list_stack.push(start);
+            }
+            Tag::Item => {
+                if !self
+                    .lines
+                    .last()
+                    .map(|l| l.spans.is_empty())
+                    .unwrap_or(true)
+                {
+                    self.lines.push(StyledLine::new());
+                }
+                // Two columns of indent per nesting level, then the
+                // item marker: `• ` for unordered lists, `N. ` for
+                // ordered ones (advancing the level's counter). NBSP
+                // indent so `preserve_leading_whitespace`-style
+                // wrapping keeps the hanging indent.
+                let depth = self.list_stack.len().saturating_sub(1);
+                let marker = match self.list_stack.last_mut() {
+                    Some(Some(n)) => {
+                        let m = format!("{}{}. ", "\u{00A0}".repeat(depth * 2), n);
+                        *n += 1;
+                        m
+                    }
+                    _ => format!("{}• ", "\u{00A0}".repeat(depth * 2)),
+                };
+                let style = *self.style_stack.last().unwrap_or(&Style::default());
+                if let Some(line) = self.lines.last_mut() {
+                    line.push(marker, style);
+                }
+            }
+            Tag::Paragraph => {
+                // Start paragraphs on new line if we have any prior content.
+                // This preserves blank lines from previous paragraph ends.
+                let has_prior_content = self.lines.iter().any(|l| !l.spans.is_empty());
+                if has_prior_content {
+                    self.lines.push(StyledLine::new());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle the end of a markdown tag.
+    fn end_tag(&mut self, tag_end: TagEnd) {
+        match tag_end {
+            TagEnd::Strong
+            | TagEnd::Emphasis
+            | TagEnd::Strikethrough
+            | TagEnd::Heading(_)
+            | TagEnd::Image => {
+                self.style_stack.pop();
+            }
+            TagEnd::Link => {
+                self.style_stack.pop();
+                // Clear link URL when exiting the link
+                self.current_link_url = None;
+            }
+            TagEnd::CodeBlock => {
+                self.in_code_block = false;
+                self.code_block_lang.clear();
+                // End code block with new line
+                self.lines.push(StyledLine::new());
+            }
+            TagEnd::Paragraph => {
+                // Add blank line after paragraph
+                self.lines.push(StyledLine::new());
+            }
+            TagEnd::Item => {
+                // Items end naturally
+            }
+            TagEnd::List(_) => {
+                self.list_stack.pop();
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle a text event, highlighting it when inside a code block.
+    fn text(&mut self, text: CowStr<'_>) {
+        if self.in_code_block {
+            // Try syntax highlighting for code blocks using syntect
+            let spans = if let Some(reg) = self.registry {
+                if !self.code_block_lang.is_empty() {
+                    let s = highlight_string(&text, &self.code_block_lang, reg, self.theme);
+                    // Check coverage - if < 20% highlighted, content may not be valid code
+                    let highlighted_bytes: usize =
+                        s.iter().map(|span| span.range.end - span.range.start).sum();
+                    let non_ws_bytes = text.bytes().filter(|b| !b.is_ascii_whitespace()).count();
+                    let good_coverage = non_ws_bytes == 0 || highlighted_bytes * 5 >= non_ws_bytes;
+                    if good_coverage {
+                        s
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+
+            if !spans.is_empty() {
+                let highlighted_lines = highlight_code_to_styled_lines(&text, &spans, self.theme);
+                for (i, styled_line) in highlighted_lines.into_iter().enumerate() {
+                    if i > 0 {
+                        self.lines.push(StyledLine::new());
+                    }
+                    // Merge spans into the current line
+                    if let Some(current_line) = self.lines.last_mut() {
+                        for span in styled_line.spans {
+                            current_line.push(span.text, span.style);
+                        }
+                    }
+                }
+            } else {
+                // Fallback: uniform code style for unknown languages.
+                // Uses `popup_text_fg` (popup body) rather than
+                // `help_key_fg` (key/heading accent) — see issue #2033.
+                let code_style = Style::default()
+                    .theme_fg(self.theme, "ui.popup_text_fg")
+                    .theme_bg(self.theme, "ui.inline_code_bg");
+                add_text_to_lines(&mut self.lines, &text, code_style, None);
+            }
+        } else {
+            let current_style = *self.style_stack.last().unwrap_or(&Style::default());
+            add_text_to_lines(
+                &mut self.lines,
+                &text,
+                current_style,
+                self.current_link_url.clone(),
+            );
+        }
+    }
+
+    /// Inline code - render with background styling (no backticks needed).
+    /// Uses `popup_text_fg` (popup body) rather than `help_key_fg`
+    /// (key/heading accent) — see issue #2033.
+    fn inline_code(&mut self, code: CowStr<'_>) {
+        let style = Style::default()
+            .theme_fg(self.theme, "ui.popup_text_fg")
+            .theme_bg(self.theme, "ui.inline_code_bg");
+        if let Some(line) = self.lines.last_mut() {
+            line.push(code.to_string(), style);
+        }
+    }
+
+    /// Soft break - preserve as newline for better docstring/hover formatting
+    /// (Standard markdown renders soft breaks as spaces, but for LSP hover
+    /// content which often contains formatted docstrings, newlines are better)
+    fn soft_break(&mut self) {
+        self.lines.push(StyledLine::new());
+    }
+
+    /// Hard break - new line
+    fn hard_break(&mut self) {
+        self.lines.push(StyledLine::new());
+    }
+
+    /// Horizontal rule
+    fn rule(&mut self) {
+        self.lines.push(StyledLine::new());
+        if let Some(line) = self.lines.last_mut() {
+            line.push("─".repeat(40), Style::default().fg(Color::DarkGray));
+        }
+        self.lines.push(StyledLine::new());
+    }
+
+    /// Remove trailing empty lines and return the rendered lines.
+    fn finish(mut self) -> Vec<StyledLine> {
+        // Remove trailing empty lines
+        while self
+            .lines
+            .last()
+            .map(|l| l.spans.is_empty())
+            .unwrap_or(false)
+        {
+            self.lines.pop();
+        }
+
+        self.lines
+    }
+}
+
 /// Parse markdown text into styled lines for terminal rendering
 ///
 /// If `registry` is provided, uses syntect for syntax highlighting in code blocks,
@@ -455,237 +752,13 @@ pub fn parse_markdown(
     options.insert(Options::ENABLE_STRIKETHROUGH);
 
     let parser = Parser::new_ext(&preserved, options);
-    let mut lines: Vec<StyledLine> = vec![StyledLine::new()];
-
-    // Style stack for nested formatting. Seeded with `popup_text_fg` so
-    // body text carries an explicit fg that reads against `popup_bg`,
-    // instead of inheriting the host terminal's default fg — which on a
-    // dark-terminal host running the light theme paints near-white text
-    // on the near-white popup background. See issue #2033.
-    let mut style_stack: Vec<Style> = vec![Style::default().theme_fg(theme, "ui.popup_text_fg")];
-    let mut in_code_block = false;
-    let mut code_block_lang = String::new();
-    // Track current link URL (if inside a link)
-    let mut current_link_url: Option<String> = None;
-    // List nesting. Each level carries the next ordinal for an ordered
-    // list, or `None` for an unordered one, so items render with a
-    // leading `• ` / `N. ` marker indented by depth. Without a marker
-    // a hover doc's `- a` / `- b` collapsed into indistinguishable
-    // plain lines.
-    let mut list_stack: Vec<Option<u64>> = Vec::new();
+    let mut renderer = MarkdownRenderer::new(theme, registry);
 
     for event in parser {
-        match event {
-            Event::Start(tag) => {
-                match tag {
-                    Tag::Strong => {
-                        let current = *style_stack.last().unwrap_or(&Style::default());
-                        style_stack.push(current.add_modifier(Modifier::BOLD));
-                    }
-                    Tag::Emphasis => {
-                        let current = *style_stack.last().unwrap_or(&Style::default());
-                        style_stack.push(current.add_modifier(Modifier::ITALIC));
-                    }
-                    Tag::Strikethrough => {
-                        let current = *style_stack.last().unwrap_or(&Style::default());
-                        style_stack.push(current.add_modifier(Modifier::CROSSED_OUT));
-                    }
-                    Tag::CodeBlock(kind) => {
-                        in_code_block = true;
-                        code_block_lang = match kind {
-                            pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
-                            pulldown_cmark::CodeBlockKind::Indented => String::new(),
-                        };
-                        // Start new line for code block
-                        if !lines.last().map(|l| l.spans.is_empty()).unwrap_or(true) {
-                            lines.push(StyledLine::new());
-                        }
-                    }
-                    Tag::Heading { .. } => {
-                        let current = *style_stack.last().unwrap_or(&Style::default());
-                        style_stack.push(
-                            current
-                                .add_modifier(Modifier::BOLD)
-                                .theme_fg(theme, "ui.help_key_fg"),
-                        );
-                    }
-                    Tag::Link { dest_url, .. } => {
-                        let current = *style_stack.last().unwrap_or(&Style::default());
-                        style_stack
-                            .push(current.add_modifier(Modifier::UNDERLINED).fg(Color::Cyan));
-                        // Store the link URL for text spans inside this link
-                        current_link_url = Some(dest_url.to_string());
-                    }
-                    Tag::Image { .. } => {
-                        let current = *style_stack.last().unwrap_or(&Style::default());
-                        style_stack
-                            .push(current.add_modifier(Modifier::UNDERLINED).fg(Color::Cyan));
-                    }
-                    Tag::List(start) => {
-                        if !lines.last().map(|l| l.spans.is_empty()).unwrap_or(true) {
-                            lines.push(StyledLine::new());
-                        }
-                        list_stack.push(start);
-                    }
-                    Tag::Item => {
-                        if !lines.last().map(|l| l.spans.is_empty()).unwrap_or(true) {
-                            lines.push(StyledLine::new());
-                        }
-                        // Two columns of indent per nesting level, then the
-                        // item marker: `• ` for unordered lists, `N. ` for
-                        // ordered ones (advancing the level's counter). NBSP
-                        // indent so `preserve_leading_whitespace`-style
-                        // wrapping keeps the hanging indent.
-                        let depth = list_stack.len().saturating_sub(1);
-                        let marker = match list_stack.last_mut() {
-                            Some(Some(n)) => {
-                                let m = format!("{}{}. ", "\u{00A0}".repeat(depth * 2), n);
-                                *n += 1;
-                                m
-                            }
-                            _ => format!("{}• ", "\u{00A0}".repeat(depth * 2)),
-                        };
-                        let style = *style_stack.last().unwrap_or(&Style::default());
-                        if let Some(line) = lines.last_mut() {
-                            line.push(marker, style);
-                        }
-                    }
-                    Tag::Paragraph => {
-                        // Start paragraphs on new line if we have any prior content.
-                        // This preserves blank lines from previous paragraph ends.
-                        let has_prior_content = lines.iter().any(|l| !l.spans.is_empty());
-                        if has_prior_content {
-                            lines.push(StyledLine::new());
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Event::End(tag_end) => {
-                match tag_end {
-                    TagEnd::Strong
-                    | TagEnd::Emphasis
-                    | TagEnd::Strikethrough
-                    | TagEnd::Heading(_)
-                    | TagEnd::Image => {
-                        style_stack.pop();
-                    }
-                    TagEnd::Link => {
-                        style_stack.pop();
-                        // Clear link URL when exiting the link
-                        current_link_url = None;
-                    }
-                    TagEnd::CodeBlock => {
-                        in_code_block = false;
-                        code_block_lang.clear();
-                        // End code block with new line
-                        lines.push(StyledLine::new());
-                    }
-                    TagEnd::Paragraph => {
-                        // Add blank line after paragraph
-                        lines.push(StyledLine::new());
-                    }
-                    TagEnd::Item => {
-                        // Items end naturally
-                    }
-                    TagEnd::List(_) => {
-                        list_stack.pop();
-                    }
-                    _ => {}
-                }
-            }
-            Event::Text(text) => {
-                if in_code_block {
-                    // Try syntax highlighting for code blocks using syntect
-                    let spans = if let Some(reg) = registry {
-                        if !code_block_lang.is_empty() {
-                            let s = highlight_string(&text, &code_block_lang, reg, theme);
-                            // Check coverage - if < 20% highlighted, content may not be valid code
-                            let highlighted_bytes: usize =
-                                s.iter().map(|span| span.range.end - span.range.start).sum();
-                            let non_ws_bytes =
-                                text.bytes().filter(|b| !b.is_ascii_whitespace()).count();
-                            let good_coverage =
-                                non_ws_bytes == 0 || highlighted_bytes * 5 >= non_ws_bytes;
-                            if good_coverage {
-                                s
-                            } else {
-                                Vec::new()
-                            }
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-
-                    if !spans.is_empty() {
-                        let highlighted_lines =
-                            highlight_code_to_styled_lines(&text, &spans, theme);
-                        for (i, styled_line) in highlighted_lines.into_iter().enumerate() {
-                            if i > 0 {
-                                lines.push(StyledLine::new());
-                            }
-                            // Merge spans into the current line
-                            if let Some(current_line) = lines.last_mut() {
-                                for span in styled_line.spans {
-                                    current_line.push(span.text, span.style);
-                                }
-                            }
-                        }
-                    } else {
-                        // Fallback: uniform code style for unknown languages.
-                        // Uses `popup_text_fg` (popup body) rather than
-                        // `help_key_fg` (key/heading accent) — see issue #2033.
-                        let code_style = Style::default()
-                            .theme_fg(theme, "ui.popup_text_fg")
-                            .theme_bg(theme, "ui.inline_code_bg");
-                        add_text_to_lines(&mut lines, &text, code_style, None);
-                    }
-                } else {
-                    let current_style = *style_stack.last().unwrap_or(&Style::default());
-                    add_text_to_lines(&mut lines, &text, current_style, current_link_url.clone());
-                }
-            }
-            Event::Code(code) => {
-                // Inline code - render with background styling (no backticks needed).
-                // Uses `popup_text_fg` (popup body) rather than `help_key_fg`
-                // (key/heading accent) — see issue #2033.
-                let style = Style::default()
-                    .theme_fg(theme, "ui.popup_text_fg")
-                    .theme_bg(theme, "ui.inline_code_bg");
-                if let Some(line) = lines.last_mut() {
-                    line.push(code.to_string(), style);
-                }
-            }
-            Event::SoftBreak => {
-                // Soft break - preserve as newline for better docstring/hover formatting
-                // (Standard markdown renders soft breaks as spaces, but for LSP hover
-                // content which often contains formatted docstrings, newlines are better)
-                lines.push(StyledLine::new());
-            }
-            Event::HardBreak => {
-                // Hard break - new line
-                lines.push(StyledLine::new());
-            }
-            Event::Rule => {
-                // Horizontal rule
-                lines.push(StyledLine::new());
-                if let Some(line) = lines.last_mut() {
-                    line.push("─".repeat(40), Style::default().fg(Color::DarkGray));
-                }
-                lines.push(StyledLine::new());
-            }
-            _ => {}
-        }
+        renderer.handle_event(event);
     }
 
-    // Remove trailing empty lines
-    while lines.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
-        lines.pop();
-    }
-
-    lines
+    renderer.finish()
 }
 
 #[cfg(test)]
