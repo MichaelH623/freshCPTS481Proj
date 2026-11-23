@@ -158,6 +158,7 @@ const SCOPE_CATEGORY_RULES: &[(&str, HighlightCategory)] = &[
 ];
 
 /// Map TextMate scope to highlight category
+// This method should expand more scope rules and drastically reduce the Cxty
 fn scope_to_category(scope: &str) -> Option<HighlightCategory> {
     let scope_lower = scope.to_lowercase();
     SCOPE_CATEGORY_RULES
@@ -6551,6 +6552,95 @@ diff --git a/has space.py b/has space.py
             assert_eq!(view(tm, &typed, top), 0, "{top}: viewed again, highlighted");
             tm.notify_delete(top + 10, 1);
             assert_eq!(view(tm, &buffer, top), 0, "{top}: after undo, highlighted");
+        }
+    }
+
+    /// Pins down what `scope_to_category` returns for every rule so refactoring it will show me if I messed up
+    #[test]
+    fn test_scope_to_category_every_rule() {
+        let cases: &[(&str, Option<HighlightCategory>)] = &[
+            ("comment.line.double-slash", Some(HighlightCategory::Comment)),
+            ("Comment.Block", Some(HighlightCategory::Comment)), // case-insensitive
+            ("string.quoted.double", Some(HighlightCategory::String)),
+            ("markup.heading.1", Some(HighlightCategory::Keyword)),
+            ("entity.name.section.markdown", Some(HighlightCategory::Keyword)),
+            ("markup.bold", Some(HighlightCategory::Constant)),
+            ("markup.italic", Some(HighlightCategory::Variable)),
+            ("markup.raw.block", Some(HighlightCategory::String)),
+            ("markup.inline.raw", Some(HighlightCategory::String)),
+            ("markup.underline.link", Some(HighlightCategory::Function)),
+            ("markup.underline", Some(HighlightCategory::Function)),
+            ("markup.quote", Some(HighlightCategory::Comment)),
+            ("markup.list.numbered", Some(HighlightCategory::Operator)),
+            ("markup.strikethrough", Some(HighlightCategory::Comment)),
+            ("markup.inserted.diff", Some(HighlightCategory::Inserted)),
+            ("markup.deleted.diff", Some(HighlightCategory::Deleted)),
+            ("markup.changed", Some(HighlightCategory::Changed)),
+            ("meta.diff.range.unified", Some(HighlightCategory::Changed)),
+            ("meta.diff.header.git", Some(HighlightCategory::Type)),
+            ("keyword.operator.new", Some(HighlightCategory::Keyword)),
+            ("keyword.operator.expression.typeof", Some(HighlightCategory::Keyword)),
+            ("keyword.operator.word", Some(HighlightCategory::Keyword)),
+            ("keyword.operator.assignment", Some(HighlightCategory::Operator)),
+            ("keyword.control.if", Some(HighlightCategory::Keyword)),
+            ("keyword.other.use", Some(HighlightCategory::Keyword)),
+            ("keyword.declaration.fn", Some(HighlightCategory::Keyword)),
+            ("keyword", Some(HighlightCategory::Keyword)),
+            ("punctuation.definition.comment", Some(HighlightCategory::Comment)),
+            ("punctuation.definition.string.begin", Some(HighlightCategory::String)),
+            ("punctuation.section.block", Some(HighlightCategory::PunctuationBracket)),
+            ("punctuation.bracket.round", Some(HighlightCategory::PunctuationBracket)),
+            ("punctuation.definition.array", Some(HighlightCategory::PunctuationBracket)),
+            ("punctuation.definition.block", Some(HighlightCategory::PunctuationBracket)),
+            ("punctuation.definition.brackets", Some(HighlightCategory::PunctuationBracket)),
+            ("punctuation.definition.group", Some(HighlightCategory::PunctuationBracket)),
+            ("punctuation.definition.inline-table", Some(HighlightCategory::PunctuationBracket)),
+            ("punctuation.definition.section", Some(HighlightCategory::PunctuationBracket)),
+            ("punctuation.definition.table", Some(HighlightCategory::PunctuationBracket)),
+            ("punctuation.definition.tag", Some(HighlightCategory::PunctuationBracket)),
+            ("punctuation.definition.typeparameters", Some(HighlightCategory::PunctuationBracket)),
+            ("punctuation.definition.parameters", Some(HighlightCategory::PunctuationBracket)),
+            ("meta.brace.round", Some(HighlightCategory::PunctuationBracket)),
+            ("punctuation.separator.comma", Some(HighlightCategory::PunctuationDelimiter)),
+            ("punctuation.terminator.statement", Some(HighlightCategory::PunctuationDelimiter)),
+            ("punctuation.accessor.dot", Some(HighlightCategory::PunctuationDelimiter)),
+            ("entity.name.function", Some(HighlightCategory::Function)),
+            ("support.function.builtin", Some(HighlightCategory::Function)),
+            ("meta.function-call", Some(HighlightCategory::Function)),
+            ("variable.function", Some(HighlightCategory::Function)),
+            ("entity.name.type", Some(HighlightCategory::Type)),
+            ("entity.name.class", Some(HighlightCategory::Type)),
+            ("entity.name.struct", Some(HighlightCategory::Type)),
+            ("entity.name.enum", Some(HighlightCategory::Type)),
+            ("entity.name.interface", Some(HighlightCategory::Type)),
+            ("entity.name.trait", Some(HighlightCategory::Type)),
+            ("support.type.primitive", Some(HighlightCategory::Type)),
+            ("support.class", Some(HighlightCategory::Type)),
+            ("storage.type.function", Some(HighlightCategory::Keyword)),
+            ("storage.modifier.pub", Some(HighlightCategory::Keyword)),
+            ("constant.numeric.integer", Some(HighlightCategory::Number)),
+            ("constant.language.boolean", Some(HighlightCategory::Number)),
+            ("constant.language.null", Some(HighlightCategory::Constant)),
+            ("variable.other.property", Some(HighlightCategory::Property)),
+            ("variable.other.object.property", Some(HighlightCategory::Property)),
+            ("support.variable.property", Some(HighlightCategory::Property)),
+            ("support.variable.dom", Some(HighlightCategory::VariableBuiltin)),
+            ("support.constant.math", Some(HighlightCategory::Constant)),
+            ("variable.language.this", Some(HighlightCategory::VariableBuiltin)),
+            ("variable.parameter", Some(HighlightCategory::Variable)),
+            ("variable.other.readwrite", Some(HighlightCategory::Variable)),
+            ("entity.name.tag.html", Some(HighlightCategory::Property)),
+            ("support.other.property", Some(HighlightCategory::Property)),
+            ("meta.object-literal.key", Some(HighlightCategory::Property)),
+            ("entity.other.attribute-name", Some(HighlightCategory::Attribute)),
+            ("meta.attribute", Some(HighlightCategory::Attribute)),
+            ("entity.name.decorator", Some(HighlightCategory::Attribute)),
+            ("variable", Some(HighlightCategory::Variable)),
+            ("source.rust", None),
+            ("", None),
+        ];
+        for (scope, expected) in cases {
+            assert_eq!(scope_to_category(scope), *expected, "scope: {scope}");
         }
     }
 }
