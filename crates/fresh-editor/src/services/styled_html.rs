@@ -31,6 +31,46 @@ fn color_to_css(color: Color, default: &str) -> String {
     }
 }
 
+fn make_color_map(text: &str, highlight_spans: &[HighlightSpan]) -> Vec<Option<Color>> {
+    // Build a map of byte offset to color for quick lookup
+    let mut color_map: Vec<Option<Color>> = vec![None; text.len()];
+    for span in highlight_spans {
+        let start = span.range.start.min(text.len());
+        let end = span.range.end.min(text.len());
+        for slot in &mut color_map[start..end] {
+            *slot = Some(span.color);
+        }
+    }
+    color_map
+}
+
+fn change_span(html: &mut String, span_open: &mut bool, char_color: Option<Color>, fg_color: &str) {
+    // Close previous span if open
+    if *span_open {
+        html.push_str("</span>");
+        *span_open = false;
+    }
+
+    // Open new span if we have a color
+    if let Some(color) = char_color {
+        let css_color = color_to_css(color, fg_color);
+        html.push_str(&format!("<span style=\"color:{};\">", css_color));
+        *span_open = true;
+    }
+}
+
+fn escape_char(html: &mut String, ch: char) {
+    // Escape HTML special characters and add the character
+    match ch {
+        '<' => html.push_str("&lt;"),
+        '>' => html.push_str("&gt;"),
+        '&' => html.push_str("&amp;"),
+        '"' => html.push_str("&quot;"),
+        '\'' => html.push_str("&#39;"),
+        _ => html.push(ch),
+    }
+}
+
 /// Render styled text with syntax highlighting to HTML with inline CSS
 ///
 /// The generated HTML uses a `<pre>` block with inline styles for each
@@ -48,15 +88,7 @@ pub fn render_styled_html(text: &str, highlight_spans: &[HighlightSpan], theme: 
     let bg_color = color_to_css(theme.editor_bg, "#1e1e1e");
     let fg_color = color_to_css(theme.editor_fg, "#d4d4d4");
 
-    // Build a map of byte offset to color for quick lookup
-    let mut color_map: Vec<Option<Color>> = vec![None; text.len()];
-    for span in highlight_spans {
-        let start = span.range.start.min(text.len());
-        let end = span.range.end.min(text.len());
-        for slot in &mut color_map[start..end] {
-            *slot = Some(span.color);
-        }
-    }
+    let color_map = make_color_map(text, highlight_spans);
 
     // Build HTML with spans for colored regions
     let mut html = String::new();
@@ -70,44 +102,18 @@ pub fn render_styled_html(text: &str, highlight_spans: &[HighlightSpan], theme: 
     let mut byte_offset = 0;
 
     for ch in text.chars() {
-        let char_byte_len = ch.len_utf8();
-
         // Get color for this character
-        let char_color = if byte_offset < color_map.len() {
-            color_map[byte_offset]
-        } else {
-            None
-        };
+        let char_color = color_map.get(byte_offset).copied().flatten();
 
         // Check if we need to change the color span
         if char_color != current_color {
-            // Close previous span if open
-            if span_open {
-                html.push_str("</span>");
-                span_open = false;
-            }
-
-            // Open new span if we have a color
-            if let Some(color) = char_color {
-                let css_color = color_to_css(color, &fg_color);
-                html.push_str(&format!("<span style=\"color:{};\">", css_color));
-                span_open = true;
-            }
-
+            change_span(&mut html, &mut span_open, char_color, &fg_color);
             current_color = char_color;
         }
 
-        // Escape HTML special characters and add the character
-        match ch {
-            '<' => html.push_str("&lt;"),
-            '>' => html.push_str("&gt;"),
-            '&' => html.push_str("&amp;"),
-            '"' => html.push_str("&quot;"),
-            '\'' => html.push_str("&#39;"),
-            _ => html.push(ch),
-        }
+        escape_char(&mut html, ch);
 
-        byte_offset += char_byte_len;
+        byte_offset += ch.len_utf8();
     }
 
     // Close any remaining span
@@ -175,5 +181,19 @@ mod tests {
         assert_eq!(color_to_css(Color::Black, "#fff"), "#000000");
         assert_eq!(color_to_css(Color::Rgb(255, 128, 0), "#fff"), "#ff8000");
         assert_eq!(color_to_css(Color::Reset, "#default"), "#default");
+    }
+
+    #[test]
+    fn test_escape_char() {
+        let mut html = String::new();
+        escape_char(&mut html, '<');
+        escape_char(&mut html, 'a');
+        assert_eq!(html, "&lt;a");
+    }
+
+    #[test]
+    fn test_make_color_map() {
+        let map = make_color_map("abc", &[]);
+        assert_eq!(map, vec![None, None, None]);
     }
 }
