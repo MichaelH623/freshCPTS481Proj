@@ -14,7 +14,7 @@ pub struct Position {
 pub enum BufferData {
     /// Loaded in memory with optional line indexing
     Loaded {
-        data: Vec<u8>,
+        data: Arc<Vec<u8>>,
         line_starts: Option<Vec<usize>>, // None = not indexed (large file mode)
     },
     /// Not yet loaded from file
@@ -47,7 +47,7 @@ impl StringBuffer {
         StringBuffer {
             id,
             data: BufferData::Loaded {
-                data,
+                data: Arc::new(data),
                 line_starts: Some(line_starts),
             },
             stored_file_offset: None,
@@ -63,7 +63,10 @@ impl StringBuffer {
         };
         StringBuffer {
             id,
-            data: BufferData::Loaded { data, line_starts },
+            data: BufferData::Loaded {
+                data: Arc::new(data),
+                line_starts,
+            },
             stored_file_offset: None,
         }
     }
@@ -178,7 +181,7 @@ impl StringBuffer {
                 // work on large-file chunks.
                 let line_starts = Self::compute_line_starts(&buffer);
                 self.data = BufferData::Loaded {
-                    data: buffer,
+                    data: Arc::new(buffer),
                     line_starts: Some(line_starts),
                 };
 
@@ -258,7 +261,7 @@ impl StringBuffer {
         match &mut self.data {
             BufferData::Loaded { data, line_starts } => {
                 let start_offset = data.len();
-                data.extend_from_slice(data_to_append);
+                Arc::make_mut(data).extend_from_slice(data_to_append);
 
                 // Add new line starts if we're tracking them
                 if let Some(ref mut line_starts) = line_starts {
@@ -3639,6 +3642,26 @@ mod property_tests {
                     content.len()
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_sharing_tests {
+    use super::*;
+    #[test]
+    fn cloning_a_loaded_buffer_shares_its_bytes() {
+        let original = StringBuffer::new(0, vec![b'x'; 1024]);
+        let copy = original.clone();
+        match (&original.data, &copy.data) {
+            (BufferData::Loaded { data: a, .. }, BufferData::Loaded { data: b, .. }) => {
+                assert_eq!(
+                    a.as_ptr(),
+                    b.as_ptr(),
+                    "snapshot copied the chunck instead of sharing it"
+                );
+            }
+            _ => panic!("expected loaded buffers"),
         }
     }
 }
