@@ -438,6 +438,16 @@ fn preserve_leading_whitespace(text: &str) -> String {
         .join("\n")
 }
 
+/// Check coverage - if < 20% highlighted, content may not be valid code.
+fn has_good_highlight_coverage(text: &str, spans: &[HighlightSpan]) -> bool {
+    let highlighted_bytes: usize = spans
+        .iter()
+        .map(|span| span.range.end - span.range.start)
+        .sum();
+    let non_ws_bytes = text.bytes().filter(|b| !b.is_ascii_whitespace()).count();
+    non_ws_bytes == 0 || highlighted_bytes * 5 >= non_ws_bytes
+}
+
 /// Mutable rendering state threaded through markdown event handling.
 struct MarkdownRenderer<'a> {
     theme: &'a crate::theme::Theme,
@@ -628,51 +638,7 @@ impl<'a> MarkdownRenderer<'a> {
 
     /// Handle a text event, highlighting it when inside a code block.
     fn text(&mut self, text: CowStr<'_>) {
-        if self.in_code_block {
-            // Try syntax highlighting for code blocks using syntect
-            let spans = if let Some(reg) = self.registry {
-                if !self.code_block_lang.is_empty() {
-                    let s = highlight_string(&text, &self.code_block_lang, reg, self.theme);
-                    // Check coverage - if < 20% highlighted, content may not be valid code
-                    let highlighted_bytes: usize =
-                        s.iter().map(|span| span.range.end - span.range.start).sum();
-                    let non_ws_bytes = text.bytes().filter(|b| !b.is_ascii_whitespace()).count();
-                    let good_coverage = non_ws_bytes == 0 || highlighted_bytes * 5 >= non_ws_bytes;
-                    if good_coverage {
-                        s
-                    } else {
-                        Vec::new()
-                    }
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            };
-
-            if !spans.is_empty() {
-                let highlighted_lines = highlight_code_to_styled_lines(&text, &spans, self.theme);
-                for (i, styled_line) in highlighted_lines.into_iter().enumerate() {
-                    if i > 0 {
-                        self.lines.push(StyledLine::new());
-                    }
-                    // Merge spans into the current line
-                    if let Some(current_line) = self.lines.last_mut() {
-                        for span in styled_line.spans {
-                            current_line.push(span.text, span.style);
-                        }
-                    }
-                }
-            } else {
-                // Fallback: uniform code style for unknown languages.
-                // Uses `popup_text_fg` (popup body) rather than
-                // `help_key_fg` (key/heading accent) — see issue #2033.
-                let code_style = Style::default()
-                    .theme_fg(self.theme, "ui.popup_text_fg")
-                    .theme_bg(self.theme, "ui.inline_code_bg");
-                add_text_to_lines(&mut self.lines, &text, code_style, None);
-            }
-        } else {
+        if !self.in_code_block {
             let current_style = self.current_style();
             add_text_to_lines(
                 &mut self.lines,
@@ -680,6 +646,58 @@ impl<'a> MarkdownRenderer<'a> {
                 current_style,
                 self.current_link_url.clone(),
             );
+            return;
+        }
+        self.code_block_text(&text);
+    }
+
+    /// Render text inside a code block, syntax-highlighted when possible.
+    fn code_block_text(&mut self, text: &str) {
+        let spans = self.highlight_code_block(text);
+
+        if spans.is_empty() {
+            // Fallback: uniform code style for unknown languages.
+            // Uses `popup_text_fg` (popup body) rather than
+            // `help_key_fg` (key/heading accent) — see issue #2033.
+            let code_style = Style::default()
+                .theme_fg(self.theme, "ui.popup_text_fg")
+                .theme_bg(self.theme, "ui.inline_code_bg");
+            add_text_to_lines(&mut self.lines, text, code_style, None);
+            return;
+        }
+        self.append_highlighted_lines(text, &spans);
+    }
+
+    /// Try syntax highlighting for code blocks using syntect; returns no spans
+    /// when there is no registry, no language, or poor highlight coverage.
+    fn highlight_code_block(&self, text: &str) -> Vec<HighlightSpan> {
+        let Some(reg) = self.registry else {
+            return Vec::new();
+        };
+        if self.code_block_lang.is_empty() {
+            return Vec::new();
+        }
+        let s = highlight_string(text, &self.code_block_lang, reg, self.theme);
+        if has_good_highlight_coverage(text, &s) {
+            s
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Append syntax-highlighted code to the rendered lines.
+    fn append_highlighted_lines(&mut self, text: &str, spans: &[HighlightSpan]) {
+        let highlighted_lines = highlight_code_to_styled_lines(text, spans, self.theme);
+        for (i, styled_line) in highlighted_lines.into_iter().enumerate() {
+            if i > 0 {
+                self.lines.push(StyledLine::new());
+            }
+            // Merge spans into the current line
+            if let Some(current_line) = self.lines.last_mut() {
+                for span in styled_line.spans {
+                    current_line.push(span.text, span.style);
+                }
+            }
         }
     }
 
