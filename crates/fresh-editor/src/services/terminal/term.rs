@@ -1375,94 +1375,21 @@ impl TerminalState {
             {
                 continue;
             }
-            let fg = color_to_rgb(&cell.fg);
-            let bg = color_to_rgb(&cell.bg);
-            let flags = cell.flags;
-            let bold = flags.contains(Flags::BOLD);
-            let dim = flags.contains(Flags::DIM);
-            let italic = flags.contains(Flags::ITALIC);
-            let underline = flags.contains(Flags::UNDERLINE);
+            let style = read_style(cell);
 
-            let fg_changed = fg != sgr.fg;
-            let bg_changed = bg != sgr.bg;
-            let bold_changed = bold != sgr.bold;
-            let dim_changed = dim != sgr.dim;
-            let italic_changed = italic != sgr.italic;
-            let underline_changed = underline != sgr.underline;
-
-            if fg_changed
-                || bg_changed
-                || bold_changed
-                || dim_changed
-                || italic_changed
-                || underline_changed
-            {
-                let mut codes: Vec<String> = Vec::new();
-
+            if style_changed(sgr, &style) {
                 // A turned-off attribute requires a full reset + reapply.
-                if (sgr.bold && !bold)
-                    || (sgr.dim && !dim)
-                    || (sgr.italic && !italic)
-                    || (sgr.underline && !underline)
-                {
-                    codes.push("0".to_string());
-                    if bold {
-                        codes.push("1".to_string());
-                    }
-                    if dim {
-                        codes.push("2".to_string());
-                    }
-                    if italic {
-                        codes.push("3".to_string());
-                    }
-                    if underline {
-                        codes.push("4".to_string());
-                    }
-                    if let Some((r, g, b)) = fg {
-                        codes.push(format!("38;2;{};{};{}", r, g, b));
-                    }
-                    if let Some((r, g, b)) = bg {
-                        codes.push(format!("48;2;{};{};{}", r, g, b));
-                    }
+                let codes = if attribute_turned_off(sgr, &style) {
+                    reset_codes(&style)
                 } else {
-                    if bold_changed && bold {
-                        codes.push("1".to_string());
-                    }
-                    if dim_changed && dim {
-                        codes.push("2".to_string());
-                    }
-                    if italic_changed && italic {
-                        codes.push("3".to_string());
-                    }
-                    if underline_changed && underline {
-                        codes.push("4".to_string());
-                    }
-                    if fg_changed {
-                        if let Some((r, g, b)) = fg {
-                            codes.push(format!("38;2;{};{};{}", r, g, b));
-                        } else {
-                            codes.push("39".to_string());
-                        }
-                    }
-                    if bg_changed {
-                        if let Some((r, g, b)) = bg {
-                            codes.push(format!("48;2;{};{};{}", r, g, b));
-                        } else {
-                            codes.push("49".to_string());
-                        }
-                    }
-                }
+                    change_codes(sgr, &style)
+                };
 
                 if !codes.is_empty() {
                     out.push_str(&format!("\x1b[{}m", codes.join(";")));
                 }
 
-                sgr.fg = fg;
-                sgr.bg = bg;
-                sgr.bold = bold;
-                sgr.dim = dim;
-                sgr.italic = italic;
-                sgr.underline = underline;
+                save_style(sgr, &style);
             }
 
             out.push(cell.c);
@@ -2776,6 +2703,7 @@ mod tests {
                 Just(Op::EndVisit),
             ]
         }
+        
 
         proptest! {
             #[test]
@@ -2814,5 +2742,133 @@ mod tests {
                 prop_assert_eq!(printed_lines(&file), printed);
             }
         }
+        
     }
+
+}
+
+#[cfg(test)]
+mod sgr_helper_tests {
+    use super::*;
+
+    #[test]
+    fn rgb_code_formats_color() {
+        assert_eq!(rgb_code(38, (1, 2, 3)), "38;2;1;2;3");
+    }
+
+    #[test]
+    fn reset_codes_starts_with_zero() {
+        let style = CellStyle {
+            fg: None,
+            bg: None,
+            bold: true,
+            dim: false,
+            italic: false,
+            underline: false,
+        };
+        assert_eq!(reset_codes(&style), vec!["0", "1"]);
+    }
+}
+
+struct CellStyle {
+    fg: Option<(u8, u8, u8)>,
+    bg: Option<(u8, u8, u8)>,
+    bold: bool,
+    dim: bool,
+    italic: bool,
+    underline: bool,
+}
+
+fn read_style(cell: &alacritty_terminal::term::cell::Cell) -> CellStyle {
+    use alacritty_terminal::term::cell::Flags;
+
+    CellStyle {
+        fg: color_to_rgb(&cell.fg),
+        bg: color_to_rgb(&cell.bg),
+        bold: cell.flags.contains(Flags::BOLD),
+        dim: cell.flags.contains(Flags::DIM),
+        italic: cell.flags.contains(Flags::ITALIC),
+        underline: cell.flags.contains(Flags::UNDERLINE),
+    }
+}
+
+fn style_changed(sgr: &SgrState, style: &CellStyle) -> bool {
+    style.fg != sgr.fg
+        || style.bg != sgr.bg
+        || style.bold != sgr.bold
+        || style.dim != sgr.dim
+        || style.italic != sgr.italic
+        || style.underline != sgr.underline
+}
+
+fn attribute_turned_off(sgr: &SgrState, style: &CellStyle) -> bool {
+    (sgr.bold && !style.bold)
+        || (sgr.dim && !style.dim)
+        || (sgr.italic && !style.italic)
+        || (sgr.underline && !style.underline)
+}
+
+fn rgb_code(prefix: u8, color: (u8, u8, u8)) -> String {
+    format!("{};2;{};{};{}", prefix, color.0, color.1, color.2)
+}
+
+fn reset_codes(style: &CellStyle) -> Vec<String> {
+    let mut codes: Vec<String> = vec!["0".to_string()];
+    if style.bold {
+        codes.push("1".to_string());
+    }
+    if style.dim {
+        codes.push("2".to_string());
+    }
+    if style.italic {
+        codes.push("3".to_string());
+    }
+    if style.underline {
+        codes.push("4".to_string());
+    }
+    if let Some(color) = style.fg {
+        codes.push(rgb_code(38, color));
+    }
+    if let Some(color) = style.bg {
+        codes.push(rgb_code(48, color));
+    }
+    codes
+}
+
+fn change_codes(sgr: &SgrState, style: &CellStyle) -> Vec<String> {
+    let mut codes: Vec<String> = Vec::new();
+    if style.bold != sgr.bold && style.bold {
+        codes.push("1".to_string());
+    }
+    if style.dim != sgr.dim && style.dim {
+        codes.push("2".to_string());
+    }
+    if style.italic != sgr.italic && style.italic {
+        codes.push("3".to_string());
+    }
+    if style.underline != sgr.underline && style.underline {
+        codes.push("4".to_string());
+    }
+    if style.fg != sgr.fg {
+        match style.fg {
+            Some(color) => codes.push(rgb_code(38, color)),
+            None => codes.push("39".to_string()),
+        }
+    }
+    if style.bg != sgr.bg {
+        match style.bg {
+            Some(color) => codes.push(rgb_code(48, color)),
+            None => codes.push("49".to_string()),
+        }
+    }
+    codes
+}
+
+fn save_style(sgr: &mut SgrState, style: &CellStyle) {
+    sgr.fg = style.fg;
+    sgr.bg = style.bg;
+    sgr.bold = style.bold;
+    sgr.dim = style.dim;
+    sgr.italic = style.italic;
+    sgr.underline = style.underline;
 }
