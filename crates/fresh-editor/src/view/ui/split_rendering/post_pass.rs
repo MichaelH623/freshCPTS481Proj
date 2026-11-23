@@ -9,7 +9,7 @@ use crate::primitives::ansi_background::AnsiBackground;
 use crate::view::overlay::Overlay;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use std::ops::Range;
 
 /// Render vertical column guide lines in the editor content area.
@@ -83,8 +83,6 @@ pub(super) fn tint_columns_in_lines(
     default_fg: Style,
     rows: usize,
 ) {
-    use unicode_width::UnicodeWidthChar;
-
     if columns.is_empty() {
         return;
     }
@@ -92,58 +90,92 @@ pub(super) fn tint_columns_in_lines(
     for line in lines.iter_mut().take(rows) {
         // Flattened to per-character styles, as `apply_background_to_lines`
         // does: a span is a run of one style, and a tint cuts it.
-        let mut chars: Vec<(char, Style)> = Vec::new();
-        let mut starts: Vec<usize> = Vec::new();
-        let mut col = 0usize;
-        for span in std::mem::take(&mut line.spans) {
-            let style = span.style;
-            for ch in span.content.chars() {
-                // **A combining mark shares its base's column**, because it
-                // shares its cell: `width()` is 0 for one, so rounding it up
-                // to 1 would push every column after an accent one cell right,
-                // and recording it at the running column would file it under
-                // the *next* cell — which then styles the two halves of one
-                // grapheme differently and splits it across two cells.
-                let w = UnicodeWidthChar::width(ch).unwrap_or(0);
-                let start = match w {
-                    0 => starts.last().copied().unwrap_or(col),
-                    _ => col,
-                };
-                starts.push(start);
-                col += w;
-                chars.push((ch, style));
-            }
-        }
-        // The ground where there is no text: a short line is padded out to the
-        // furthest column asked for, so the tint has a cell to colour.
-        while col <= furthest {
-            starts.push(col);
-            col += 1;
-            chars.push((' ', default_fg));
-        }
+        let (mut chars, mut starts, col) =
+            flatten_spans_with_starts(std::mem::take(&mut line.spans));
+        pad_to_column(&mut chars, &mut starts, col, furthest, default_fg);
         for &column in columns {
-            // The cell *covering* `column`, which is a grapheme rather than a
-            // char: the last char that starts at or before it, then back to
-            // the first char sharing that start, so a base and its combining
-            // marks are tinted together and stay one run.
-            let Some(last) = starts.iter().rposition(|start| *start <= column) else {
-                continue;
-            };
-            let first = start_of(&starts, last);
-            let start = starts[last];
-            let width = chars[first..=last]
-                .iter()
-                .map(|(ch, _)| UnicodeWidthChar::width(*ch).unwrap_or(0))
-                .max()
-                .unwrap_or(0)
-                .max(1);
-            if start + width > column {
-                for (_, style) in chars[first..=last].iter_mut() {
-                    *style = style.patch(tint);
-                }
-            }
+            tint_column(&mut chars, &starts, column, tint);
         }
         line.spans = compress_chars(chars);
+    }
+}
+
+/// Flatten `spans` into per-character styles, recording the display column
+/// each character starts at.
+///
+/// Returns the characters with their styles, the start column of each
+/// character (a zero-width combining mark shares its base's column), and the
+/// running display column after the last character.
+fn flatten_spans_with_starts(spans: Vec<Span<'static>>) -> (Vec<(char, Style)>, Vec<usize>, usize) {
+    use unicode_width::UnicodeWidthChar;
+
+    let mut chars: Vec<(char, Style)> = Vec::new();
+    let mut starts: Vec<usize> = Vec::new();
+    let mut col = 0usize;
+    for span in spans {
+        let style = span.style;
+        for ch in span.content.chars() {
+            // **A combining mark shares its base's column**, because it
+            // shares its cell: `width()` is 0 for one, so rounding it up
+            // to 1 would push every column after an accent one cell right,
+            // and recording it at the running column would file it under
+            // the *next* cell — which then styles the two halves of one
+            // grapheme differently and splits it across two cells.
+            let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+            let start = match w {
+                0 => starts.last().copied().unwrap_or(col),
+                _ => col,
+            };
+            starts.push(start);
+            col += w;
+            chars.push((ch, style));
+        }
+    }
+    (chars, starts, col)
+}
+
+/// Pad a flattened line with `default_fg` spaces from display column `col`
+/// through `furthest` (inclusive), recording each pad cell's start column.
+fn pad_to_column(
+    chars: &mut Vec<(char, Style)>,
+    starts: &mut Vec<usize>,
+    mut col: usize,
+    furthest: usize,
+    default_fg: Style,
+) {
+    // The ground where there is no text: a short line is padded out to the
+    // furthest column asked for, so the tint has a cell to colour.
+    while col <= furthest {
+        starts.push(col);
+        col += 1;
+        chars.push((' ', default_fg));
+    }
+}
+
+/// Patch `tint` onto every char of the grapheme covering display `column`,
+/// if any grapheme covers it.
+fn tint_column(chars: &mut [(char, Style)], starts: &[usize], column: usize, tint: Style) {
+    use unicode_width::UnicodeWidthChar;
+
+    // The cell *covering* `column`, which is a grapheme rather than a
+    // char: the last char that starts at or before it, then back to
+    // the first char sharing that start, so a base and its combining
+    // marks are tinted together and stay one run.
+    let Some(last) = starts.iter().rposition(|start| *start <= column) else {
+        return;
+    };
+    let first = start_of(starts, last);
+    let start = starts[last];
+    let width = chars[first..=last]
+        .iter()
+        .map(|(ch, _)| UnicodeWidthChar::width(*ch).unwrap_or(0))
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    if start + width > column {
+        for (_, style) in chars[first..=last].iter_mut() {
+            *style = style.patch(tint);
+        }
     }
 }
 
@@ -178,30 +210,49 @@ pub(super) fn apply_hyperlink_overlays(
         }
         for (overlay, range) in &hyperlink_overlays {
             let url = overlay.url.as_ref().unwrap();
-            // Find screen columns in this row whose source byte falls in range
-            let mut run_start: Option<u16> = None;
-            let content_x_offset = render_area.x + gutter_width as u16;
-            for (char_idx, maybe_byte) in mapping.char_source_bytes.iter().enumerate() {
-                let in_range = maybe_byte
-                    .map(|b| b >= range.start && b < range.end)
-                    .unwrap_or(false);
-                let screen_x = content_x_offset + char_idx as u16;
-                if in_range && screen_x < render_area.x + render_area.width {
-                    if run_start.is_none() {
-                        run_start = Some(screen_x);
-                    }
-                } else if let Some(start_x) = run_start.take() {
-                    apply_osc8_to_cells(buf, start_x, screen_x, y, url, cursor_screen_pos);
-                }
-            }
-            // Flush trailing run
-            if let Some(start_x) = run_start {
-                let end_x = content_x_offset + mapping.char_source_bytes.len() as u16;
-                let end_x = end_x.min(render_area.x + render_area.width);
+            for (start_x, end_x) in hyperlink_runs(mapping, range, render_area, gutter_width) {
                 apply_osc8_to_cells(buf, start_x, end_x, y, url, cursor_screen_pos);
             }
         }
     }
+}
+
+/// Find the runs of screen columns in one view line whose source byte falls
+/// in `range`, as `(start_x, end_x)` pairs with `end_x` exclusive.
+///
+/// Runs are returned in left-to-right order; a run still open at the end of
+/// the line is flushed with its end clamped to the right edge of
+/// `render_area`.
+fn hyperlink_runs(
+    mapping: &ViewLineMapping,
+    range: &Range<usize>,
+    render_area: Rect,
+    gutter_width: usize,
+) -> Vec<(u16, u16)> {
+    let mut runs = Vec::new();
+    // Find screen columns in this row whose source byte falls in range
+    let mut run_start: Option<u16> = None;
+    let content_x_offset = render_area.x + gutter_width as u16;
+    for (char_idx, maybe_byte) in mapping.char_source_bytes.iter().enumerate() {
+        let in_range = maybe_byte
+            .map(|b| b >= range.start && b < range.end)
+            .unwrap_or(false);
+        let screen_x = content_x_offset + char_idx as u16;
+        if in_range && screen_x < render_area.x + render_area.width {
+            if run_start.is_none() {
+                run_start = Some(screen_x);
+            }
+        } else if let Some(start_x) = run_start.take() {
+            runs.push((start_x, screen_x));
+        }
+    }
+    // Flush trailing run
+    if let Some(start_x) = run_start {
+        let end_x = content_x_offset + mapping.char_source_bytes.len() as u16;
+        let end_x = end_x.min(render_area.x + render_area.width);
+        runs.push((start_x, end_x));
+    }
+    runs
 }
 
 /// Apply OSC 8 hyperlink escape sequences to a run of buffer cells.
@@ -232,24 +283,56 @@ pub(super) fn apply_osc8_to_cells(
         }
         let chunk_size = if cursor_x == Some(x + 1) { 1 } else { 2 };
 
-        let mut chunk = String::new();
         let chunk_start = x;
-        for _ in 0..chunk_size {
-            if x >= end_x || x >= max_x {
-                break;
-            }
-            let sym = buf[(x, y)].symbol().to_string();
-            chunk.push_str(&sym);
-            x += 1;
-        }
+        let (chunk, next_x) = read_chunk(buf, chunk_start, y, chunk_size, end_x, max_x);
+        x = next_x;
         if !chunk.is_empty() {
             let actual_chunk_len = x - chunk_start;
-            let hyperlink = format!("\x1B]8;;{}\x07{}\x1B]8;;\x07", url, chunk);
-            buf[(chunk_start, y)].set_symbol(&hyperlink);
-            for cx in (chunk_start + 1)..chunk_start + actual_chunk_len {
-                buf[(cx, y)].set_symbol("");
-            }
+            write_osc8_chunk(buf, chunk_start, actual_chunk_len, y, url, &chunk);
         }
+    }
+}
+
+/// Read up to `chunk_size` cell symbols on row `y`, starting at column `x`
+/// and stopping early at `end_x` or `max_x` (both exclusive).
+///
+/// Returns the concatenated symbols and the column just past the last cell
+/// read.
+fn read_chunk(
+    buf: &ratatui::buffer::Buffer,
+    mut x: u16,
+    y: u16,
+    chunk_size: usize,
+    end_x: u16,
+    max_x: u16,
+) -> (String, u16) {
+    let mut chunk = String::new();
+    for _ in 0..chunk_size {
+        if x >= end_x || x >= max_x {
+            break;
+        }
+        let sym = buf[(x, y)].symbol().to_string();
+        chunk.push_str(&sym);
+        x += 1;
+    }
+    (chunk, x)
+}
+
+/// Write one OSC 8 hyperlink chunk: the escape-wrapped `chunk` goes in the
+/// cell at `chunk_start`, and the remaining `chunk_len - 1` cells it covers
+/// are blanked.
+fn write_osc8_chunk(
+    buf: &mut ratatui::buffer::Buffer,
+    chunk_start: u16,
+    chunk_len: u16,
+    y: u16,
+    url: &str,
+    chunk: &str,
+) {
+    let hyperlink = format!("\x1B]8;;{}\x07{}\x1B]8;;\x07", url, chunk);
+    buf[(chunk_start, y)].set_symbol(&hyperlink);
+    for cx in (chunk_start + 1)..chunk_start + chunk_len {
+        buf[(cx, y)].set_symbol("");
     }
 }
 
@@ -275,15 +358,7 @@ pub(super) fn apply_background_to_lines(
     let width = area_width as usize;
 
     for (y, line) in lines.iter_mut().enumerate() {
-        // Flatten existing spans into per-character styles
-        let mut existing: Vec<(char, Style)> = Vec::new();
-        let spans = std::mem::take(&mut line.spans);
-        for span in spans {
-            let style = span.style;
-            for ch in span.content.chars() {
-                existing.push((ch, style));
-            }
-        }
+        let existing = flatten_spans(std::mem::take(&mut line.spans));
 
         let mut chars_with_style = Vec::with_capacity(width);
         for x in 0..width {
@@ -297,14 +372,35 @@ pub(super) fn apply_background_to_lines(
             };
 
             if let Some(bg_color) = background.faded_color(sample_x, sample_y, theme_bg, fade) {
-                if style.bg.is_none() || matches!(style.bg, Some(Color::Reset)) {
-                    style = style.bg(bg_color);
-                }
+                style = fade_background(style, bg_color);
             }
 
             chars_with_style.push((ch, style));
         }
 
         line.spans = compress_chars(chars_with_style);
+    }
+}
+
+/// Flatten `spans` into a per-character list of `(char, style)`.
+fn flatten_spans(spans: Vec<Span<'static>>) -> Vec<(char, Style)> {
+    // Flatten existing spans into per-character styles
+    let mut existing: Vec<(char, Style)> = Vec::new();
+    for span in spans {
+        let style = span.style;
+        for ch in span.content.chars() {
+            existing.push((ch, style));
+        }
+    }
+    existing
+}
+
+/// Apply the faded `bg_color` to one cell's style, but only when the cell's
+/// background is unset or `Color::Reset`, so syntax/selection backgrounds win.
+fn fade_background(style: Style, bg_color: Color) -> Style {
+    if style.bg.is_none() || matches!(style.bg, Some(Color::Reset)) {
+        style.bg(bg_color)
+    } else {
+        style
     }
 }
