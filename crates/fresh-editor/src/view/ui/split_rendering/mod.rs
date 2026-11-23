@@ -225,17 +225,21 @@ impl SplitRenderer {
             cursors,
             viewport,
             folds,
-            area,
-            /* is_active */ false,
             &style,
-            /* lsp_waiting */ false,
-            view_mode,
-            compose_width,
-            session_mode,
-            show_line_numbers,
-            highlight_current_line,
-            true, // preview leaves have no per-split fold pin
-            show_tilde,
+            orchestration::PaneLayoutInputs {
+                area,
+                // A preview leaf is never the focused split and never owns LSP requests.
+                is_active: false,
+                lsp_waiting: false,
+                view_mode,
+                compose_width,
+                session_mode,
+                show_line_numbers,
+                highlight_current_line,
+                // Preview leaves have no per-split fold pin.
+                fold_indicators_visible: true,
+                show_tilde,
+            },
             Some((cell_theme_map, screen_width)),
         );
         let mut layout = orchestration::compute_buffer_layout(

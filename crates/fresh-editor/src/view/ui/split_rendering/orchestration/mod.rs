@@ -41,6 +41,7 @@ use ratatui::widgets::Widget;
 // pipeline. Stays crate-private; callers use the façade.
 use reconcile::{reconcile_pane, settle_pane, ReconcileInputs};
 pub(super) use render_buffer::{caret_cell, compute_buffer_layout, draw_buffer_in_split};
+pub(super) use render_buffer::{caret_cell, compute_buffer_layout, draw_buffer_in_split, PaneLayoutInputs};
 use render_composite::render_composite_buffer;
 use std::collections::HashMap;
 
@@ -554,27 +555,19 @@ fn text_pane_content(
         &bvs.cursors,
         &bvs.viewport,
         &bvs.folds,
-        content_rect,
-        is_active,
-        theme,
-        lsp_waiting,
-        view_prefs.view_mode.clone(),
-        view_prefs.compose_width,
-        estimated_line_length,
-        highlight_context_bytes,
-        relative_line_numbers,
-        use_terminal_bg,
-        session_mode,
-        software_cursor_only,
-        view_prefs.show_line_numbers,
-        effective_highlight_current_line,
-        fold_indicators_visible,
-        diagnostics_inline_text,
-        split_show_tilde,
-        indentation_guide,
-        indentation_guide_glyph,
-        rainbow_indentation,
-        bracket_highlight,
+        &style,
+        PaneLayoutInputs {
+            area: content_rect,
+            is_active,
+            lsp_waiting,
+            view_mode: view_prefs.view_mode.clone(),
+            compose_width: view_prefs.compose_width,
+            session_mode,
+            show_line_numbers: view_prefs.show_line_numbers,
+            highlight_current_line: effective_highlight_current_line,
+            fold_indicators_visible,
+            show_tilde: split_show_tilde,
+        },
         Some((cell_theme_map, screen_width)),
     );
     let has_caret = is_active && state.show_cursors;

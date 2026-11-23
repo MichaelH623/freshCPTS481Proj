@@ -169,6 +169,20 @@ pub(crate) fn resolve_cursor_fallback(
     last_line_end.map(|end| end.pos)
 }
 
+
+pub(crate) struct PaneLayoutInputs {
+    pub area: Rect,
+    pub is_active: bool,
+    pub lsp_waiting: bool,
+    pub view_mode: ViewMode,
+    pub compose_width: Option<u16>,
+    pub session_mode: bool,
+    pub show_line_numbers: bool,
+    pub highlight_current_line: bool,
+    pub fold_indicators_visible: bool,
+    pub show_tilde: bool,
+}
+
 /// Pure layout computation for a buffer in a split pane.
 /// No frame/drawing involved — produces a `BufferLayoutOutput` that the
 /// drawing phase can consume.
@@ -180,23 +194,13 @@ pub(crate) fn resolve_cursor_fallback(
 /// still `&mut` for the reads that fill caches as they go — the buffer's
 /// lazy chunk loads under `line_iterator`, the highlighter, the overlay and
 /// marker resolution in `decoration_context` — none of which is placement.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_buffer_layout(
     state: &mut EditorState,
     cursors: &Cursors,
     viewport: &Viewport,
     folds: &FoldManager,
-    area: Rect,
-    is_active: bool,
     style: &RenderStyle<'_>,
-    lsp_waiting: bool,
-    view_mode: ViewMode,
-    compose_width: Option<u16>,
-    session_mode: bool,
-    show_line_numbers: bool,
-    highlight_current_line: bool,
-    fold_indicators_visible: bool,
-    show_tilde: bool,
+    pane: PaneLayoutInputs,
     cell_theme_map: Option<(&mut Vec<CellThemeInfo>, u16)>,
 ) -> BufferLayoutOutput {
     let _span = tracing::trace_span!("compute_buffer_layout").entered();
@@ -216,6 +220,19 @@ pub(crate) fn compute_buffer_layout(
         bracket_highlight,
         ..
     } = style.cfg;
+
+    let PaneLayoutInputs {
+        area,
+        is_active,
+        lsp_waiting,
+        view_mode,
+        compose_width,
+        session_mode,
+        show_line_numbers,
+        highlight_current_line,
+        fold_indicators_visible,
+        show_tilde,
+    } = pane;
 
     // Compute effective editor background: terminal default or theme-defined
     let effective_editor_bg = if use_terminal_bg {
