@@ -444,47 +444,10 @@ impl Editor {
         // prompt owns the keyboard, so no edit can shift the stored offsets.
         let search_bar_open = self.active_search_prompt_query().is_some();
 
-        let active_buffer = self.active_buffer();
-        let buffer_version = self.active_state().buffer.version();
-
-        // When the stored match set no longer describes what is on screen —
-        // another buffer, or this one after an edit the overlays did not
-        // track — its offsets mean nothing, so search again rather than
-        // navigate them. Skipped for a large file (re-scanning one per
-        // keypress is what the snapshot avoids), an open search bar (owns
-        // the keyboard, so nothing can have edited) and a search in a
-        // selection (re-running loses the range).
-        if let Some(ss) = self.active_window().search_state.as_ref() {
-            let overlays_are_authority = !is_large
-                && !search_bar_open
-                && ss.overlays_track_matches
-                && ss.collected_from.0 == active_buffer;
-            let describes_now = ss.collected_from == (active_buffer, buffer_version);
-            if !overlays_are_authority
-                && !describes_now
-                && !is_large
-                && !search_bar_open
-                && ss.search_range.is_none()
-            {
-                let query = ss.query.clone();
-                let previous = self.active_window().search_state.clone();
-                self.perform_search(&query);
-                if self.active_window().search_state.is_none() {
-                    // `perform_search` drops the search when it finds
-                    // nothing. Put it back, so the buffer it came from is
-                    // still navigable on return.
-                    self.active_window_mut().search_state = previous;
-                    return;
-                }
-                // `perform_search` lands on the first match at/after the
-                // cursor, where a forward step wants to be; a backward one
-                // needs one more.
-                if matches!(direction, SearchDirection::Backward) {
-                    self.find_match_in_direction(SearchDirection::Backward);
-                }
-                return;
-            }
+        if self.rerun_stale_search(&direction, is_large, search_bar_open) {
+            return;
         }
+        let active_buffer = self.active_buffer();
 
         // Snapshot cursor_pos up front so the `&mut search_state` borrow
         // below doesn't conflict with the read of self.windows.
@@ -532,58 +495,15 @@ impl Editor {
                 return;
             }
 
-            let target_index = match direction {
-                SearchDirection::Forward => {
-                    // First match strictly after the cursor position, or at
-                    // it once the current match is gone.
-                    let from = if current_match_gone {
-                        cursor_pos
-                    } else {
-                        cursor_pos + 1
-                    };
-                    let idx = match match_positions.binary_search(&from) {
-                        Ok(i) | Err(i) => {
-                            if i < match_positions.len() {
-                                Some(i)
-                            } else {
-                                None
-                            }
-                        }
-                    };
-                    match idx {
-                        Some(i) => i,
-                        None if search_state.wrap_search => 0,
-                        None => {
-                            self.set_status_message(t!("search.no_matches").to_string());
-                            return;
-                        }
-                    }
-                }
-                SearchDirection::Backward => {
-                    // Last match strictly before the cursor position.
-                    let idx = if cursor_pos == 0 {
-                        None
-                    } else {
-                        match match_positions.binary_search(&(cursor_pos - 1)) {
-                            Ok(i) => Some(i),
-                            Err(i) => {
-                                if i > 0 {
-                                    Some(i - 1)
-                                } else {
-                                    None
-                                }
-                            }
-                        }
-                    };
-                    match idx {
-                        Some(i) => i,
-                        None if search_state.wrap_search => match_positions.len() - 1,
-                        None => {
-                            self.set_status_message(t!("search.no_matches").to_string());
-                            return;
-                        }
-                    }
-                }
+            let Some(target_index) = Self::step_target_index(
+                match_positions,
+                cursor_pos,
+                &direction,
+                current_match_gone,
+                search_state.wrap_search,
+            ) else {
+                self.set_status_message(t!("search.no_matches").to_string());
+                return;
             };
 
             search_state.current_match_index = Some(target_index);
@@ -610,6 +530,92 @@ impl Editor {
                 .get_keybinding_for_action("search")
                 .unwrap_or_else(|| "Ctrl+F".to_string());
             self.set_status_message(t!("search.no_active", find_key = find_key).to_string());
+        }
+    }
+
+    /// When the stored match set no longer describes the buffer on screen —
+    /// another buffer, or this one after an edit the overlays did not track —
+    /// its offsets mean nothing, so search again rather than navigate them.
+    /// Skipped for a large file (re-scanning one per keypress is what the
+    /// snapshot avoids), an open search bar (owns the keyboard, so nothing can
+    /// have edited) and a search in a selection (re-running loses the range).
+    ///
+    /// Returns `true` when it handled the step (the caller must not step again).
+    fn rerun_stale_search(
+        &mut self,
+        direction: &SearchDirection,
+        is_large: bool,
+        search_bar_open: bool,
+    ) -> bool {
+        if is_large || search_bar_open {
+            return false;
+        }
+        let active_buffer = self.active_buffer();
+        let buffer_version = self.active_state().buffer.version();
+        let Some(ss) = self.active_window().search_state.as_ref() else {
+            return false;
+        };
+        let overlays_are_authority =
+            ss.overlays_track_matches && ss.collected_from.0 == active_buffer;
+        let describes_now = ss.collected_from == (active_buffer, buffer_version);
+        if overlays_are_authority || describes_now || ss.search_range.is_some() {
+            return false;
+        }
+
+        let query = ss.query.clone();
+        let previous = self.active_window().search_state.clone();
+        self.perform_search(&query);
+        if self.active_window().search_state.is_none() {
+            // `perform_search` drops the search when it finds nothing. Put it
+            // back, so the buffer it came from is still navigable on return.
+            self.active_window_mut().search_state = previous;
+            return true;
+        }
+        // `perform_search` lands on the first match at/after the cursor, where
+        // a forward step wants to be; a backward one needs one more.
+        if matches!(direction, SearchDirection::Backward) {
+            self.find_match_in_direction(SearchDirection::Backward);
+        }
+        true
+    }
+
+    /// Index into the sorted `positions` of the match a step in `direction`
+    /// lands on from `cursor_pos`, or `None` when there is none and the search
+    /// does not `wrap`. Forward takes the first match after the cursor (or at
+    /// it once the current match is gone); backward the last one before it.
+    fn step_target_index(
+        positions: &[usize],
+        cursor_pos: usize,
+        direction: &SearchDirection,
+        current_match_gone: bool,
+        wrap: bool,
+    ) -> Option<usize> {
+        match direction {
+            SearchDirection::Forward => {
+                let from = if current_match_gone {
+                    cursor_pos
+                } else {
+                    cursor_pos + 1
+                };
+                let i = positions.partition_point(|&p| p < from);
+                if i < positions.len() {
+                    Some(i)
+                } else if wrap {
+                    Some(0)
+                } else {
+                    None
+                }
+            }
+            SearchDirection::Backward => {
+                let i = positions.partition_point(|&p| p < cursor_pos);
+                if i > 0 {
+                    Some(i - 1)
+                } else if wrap {
+                    positions.len().checked_sub(1)
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -1348,5 +1354,68 @@ impl Editor {
         self.active_window_mut().clear_search_overlays();
 
         self.set_status_message(t!("search.replaced_count", count = replacements_made).to_string());
+    }
+}
+
+#[cfg(test)]
+mod step_target_tests {
+    use super::*;
+
+    const M: &[usize] = &[10, 20, 30];
+
+    #[test]
+    fn forward_steps_past_the_match_at_the_cursor() {
+        assert_eq!(
+            Editor::step_target_index(M, 10, &SearchDirection::Forward, false, true),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn foward_stays_on_match_that_slid_into_deleted_ones_place() {
+        assert_eq!(
+            Editor::step_target_index(M, 10, &SearchDirection::Forward, true, true),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn forward_past_the_last_match_wraps_only_when_allowed() {
+        assert_eq!(
+            Editor::step_target_index(M, 30, &SearchDirection::Forward, false, true),
+            Some(0)
+        );
+        assert_eq!(
+            Editor::step_target_index(M, 30, &SearchDirection::Forward, false, false),
+            None
+        );
+    }
+
+    #[test]
+    fn backward_takes_the_last_match_before_the_cursor() {
+        assert_eq!(
+            Editor::step_target_index(M, 20, &SearchDirection::Backward, false, true),
+            Some(0)
+        );
+        assert_eq!(
+            Editor::step_target_index(M, 25, &SearchDirection::Backward, false, false),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn backward_before_the_first_match_wraps_only_allowed() {
+        assert_eq!(
+            Editor::step_target_index(M, 5, &SearchDirection::Backward, false, true),
+            Some(2)
+        );
+        assert_eq!(
+            Editor::step_target_index(M, 5, &SearchDirection::Backward, false, true),
+            Some(2)
+        );
+        assert_eq!(
+            Editor::step_target_index(M, 5, &SearchDirection::Backward, false, false),
+            None
+        );
     }
 }
