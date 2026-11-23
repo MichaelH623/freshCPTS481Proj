@@ -50,6 +50,113 @@ use std::path::Path;
 use std::sync::Arc;
 use syntect::parsing::SyntaxSet;
 
+const SCOPE_CATEGORY_RULES: &[(&str, HighlightCategory)] = &[
+    // Comments
+    ("comment", HighlightCategory::Comment),
+    ("string", HighlightCategory::String),
+    ("markup.heading", HighlightCategory::Keyword),
+    ("entity.name.section", HighlightCategory::Keyword),
+    // Bold styled like constants
+    ("markup.bold", HighlightCategory::Constant),
+    // italic styled like variables
+    ("markup.italic", HighlightCategory::Variable),
+    // Inline code and code blocks styled like strings
+    ("markup.raw", HighlightCategory::String),
+    ("markup.inline.raw", HighlightCategory::String),
+    // Links and other underlines
+    ("markup.underline", HighlightCategory::Function),
+    // Block quotes and strikethrough subdued
+    ("markup.quote", HighlightCategory::Comment),
+    ("markup.list", HighlightCategory::Operator),
+    ("markup.strikethrough", HighlightCategory::Comment),
+    // Different scopes these scope the entire row, not just the leading +/-/@@ marker, so the renderer can paint a whole-line background by reading the span's bg
+    ("markup.inserted", HighlightCategory::Inserted),
+    ("markup.deleted", HighlightCategory::Deleted),
+    ("markup.changed", HighlightCategory::Changed),
+    ("meta.diff.range", HighlightCategory::Changed),
+    ("meta.diff.header", HighlightCategory::Type),
+    // Word operators (`new`, `typeof`, `instanceof`, `in`, `of`) read as keywords.
+    //
+    // `keyword.operator.word` is the scope Sublime grammars give operators that
+    // are spelled as words rather than symbols, so it belongs here too: C/C++
+    // `sizeof`, `alignof`, `typeid`, `static_assert`, `and`/`or`/`not`, Java
+    // `instanceof`, Fortran `.and.`, VHDL `mod`/`rem`, Typst `and`/`or`/`not`.
+    // Without it they fell through to Operator, whose colour equals plain text
+    // in most themes, so they read as unhighlighted identifiers (issue #3644).
+    ("keyword.operator.new", HighlightCategory::Keyword),
+    ("keyword.operator.expression", HighlightCategory::Keyword),
+    ("keyword.operator.word", HighlightCategory::Keyword),
+    // Every other keyword.operator.* is an operator…
+    ("keyword.operator", HighlightCategory::Operator),
+    // …and anything else under keyword (control, other, declaration, …) a keyword
+    ("keyword", HighlightCategory::Keyword),
+    // Punctuation that belongs to a parent construct (comment/string delimiters),
+    // e.g. `punctuation.definition.comment` for # // /*. Must come before the
+    // generic punctuation rules below
+    ("punctuation.definition.comment", HighlightCategory::Comment),
+    ("punctuation.definition.string", HighlightCategory::String),
+    // Punctuation brackets
+    ("punctuation.section", HighlightCategory::PunctuationBracket),
+    ("punctuation.bracket", HighlightCategory::PunctuationBracket),
+    ("punctuation.definition.array", HighlightCategory::PunctuationBracket),
+    ("punctuation.definition.block", HighlightCategory::PunctuationBracket),
+    ("punctuation.definition.brackets", HighlightCategory::PunctuationBracket),
+    ("punctuation.definition.group", HighlightCategory::PunctuationBracket),
+    ("punctuation.definition.inline-table", HighlightCategory::PunctuationBracket),
+    ("punctuation.definition.section", HighlightCategory::PunctuationBracket),
+    ("punctuation.definition.table", HighlightCategory::PunctuationBracket),
+    ("punctuation.definition.tag", HighlightCategory::PunctuationBracket),
+    ("punctuation.definition.typeparameters", HighlightCategory::PunctuationBracket),
+    ("punctuation.definition.parameters", HighlightCategory::PunctuationBracket),
+    ("meta.brace", HighlightCategory::PunctuationBracket),
+    // Punctuation delimiters
+    ("punctuation.separator", HighlightCategory::PunctuationDelimiter),
+    ("punctuation.terminator", HighlightCategory::PunctuationDelimiter),
+    ("punctuation.accessor", HighlightCategory::PunctuationDelimiter),
+    // Functions
+    ("entity.name.function", HighlightCategory::Function),
+    ("support.function", HighlightCategory::Function),
+    ("meta.function-call", HighlightCategory::Function),
+    ("variable.function", HighlightCategory::Function),
+    // Types
+    ("entity.name.type", HighlightCategory::Type),
+    ("entity.name.class", HighlightCategory::Type),
+    ("entity.name.struct", HighlightCategory::Type),
+    ("entity.name.enum", HighlightCategory::Type),
+    ("entity.name.interface", HighlightCategory::Type),
+    ("entity.name.trait", HighlightCategory::Type),
+    ("support.type", HighlightCategory::Type),
+    ("support.class", HighlightCategory::Type),
+    // Storage keywords and modifiers
+    ("storage.type", HighlightCategory::Keyword),
+    ("storage.modifier", HighlightCategory::Keyword),
+    // Numbers before the general constant rule
+    ("constant.numeric", HighlightCategory::Number),
+    ("constant.language.boolean", HighlightCategory::Number),
+    ("constant", HighlightCategory::Constant),
+    // Member access
+    ("variable.other.property", HighlightCategory::Property),
+    ("variable.other.object.property", HighlightCategory::Property),
+    ("support.variable.property", HighlightCategory::Property),
+    // Host globals and library constants
+    ("support.variable", HighlightCategory::VariableBuiltin),
+    ("support.constant", HighlightCategory::Constant),
+    // Variables
+    ("variable.language", HighlightCategory::VariableBuiltin),
+    ("variable.parameter", HighlightCategory::Variable),
+    ("variable.other", HighlightCategory::Variable),
+    // Properties and object keys
+    ("entity.name.tag", HighlightCategory::Property),
+    ("support.other.property", HighlightCategory::Property),
+    ("meta.object-literal.key", HighlightCategory::Property),
+    // Attributes
+    ("entity.other.attribute", HighlightCategory::Attribute),
+    ("meta.attribute", HighlightCategory::Attribute),
+    ("entity.name.decorator", HighlightCategory::Attribute),
+    // Generic variable fallback
+    ("variable", HighlightCategory::Variable),
+];
+
 /// Map TextMate scope to highlight category
 fn scope_to_category(scope: &str) -> Option<HighlightCategory> {
     let scope_lower = scope.to_lowercase();
