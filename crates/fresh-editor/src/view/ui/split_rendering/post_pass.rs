@@ -64,7 +64,7 @@ pub(super) fn render_column_guides(
             continue;
         };
         let guide_x = content_area.content_x() + scrolled_col as u16;
-        if guide_x < render_area.x + render_area.width {
+        if guide_x < render_area.right() {
             for row in 0..guide_height {
                 let cell = &mut buf[(guide_x, render_area.y + row as u16)];
                 cell.set_symbol("│");
@@ -239,7 +239,7 @@ pub(super) fn apply_hyperlink_overlays(
 
     for (screen_row, mapping) in view_line_mappings.iter().enumerate() {
         let y = render_area.y + screen_row as u16;
-        if y >= render_area.y + render_area.height {
+        if y >= render_area.bottom() {
             break;
         }
         for (overlay, range) in &hyperlink_overlays {
@@ -272,7 +272,7 @@ fn hyperlink_runs(
             .map(|b| b >= range.start && b < range.end)
             .unwrap_or(false);
         let screen_x = content_x_offset + char_idx as u16;
-        if in_range && screen_x < render_area.x + render_area.width {
+        if in_range && screen_x < render_area.right() {
             if run_start.is_none() {
                 run_start = Some(screen_x);
             }
@@ -283,7 +283,7 @@ fn hyperlink_runs(
     // Flush trailing run
     if let Some(start_x) = run_start {
         let end_x = content_x_offset + mapping.char_source_bytes.len() as u16;
-        let end_x = end_x.min(render_area.x + render_area.width);
+        let end_x = end_x.min(render_area.right());
         runs.push((start_x, end_x));
     }
     runs
@@ -305,10 +305,10 @@ pub(super) fn apply_osc8_to_cells(
     cursor_pos: Option<(u16, u16)>,
 ) {
     let area = *buf.area();
-    if y < area.y || y >= area.y + area.height {
+    if y < area.y || y >= area.bottom() {
         return;
     }
-    let max_x = area.x + area.width;
+    let max_x = area.right();
     let cursor_x = cursor_pos.and_then(|(cx, cy)| if cy == y { Some(cx) } else { None });
     let mut x = start_x;
     while x < end_x {
@@ -346,7 +346,7 @@ fn read_chunk(
     end_x: u16,
 ) -> (String, u16) {
     let area = buf.area();
-    let max_x = area.x + area.width;
+    let max_x = area.right();
     let mut chunk = String::new();
     for _ in 0..chunk_size {
         if x >= end_x || x >= max_x {
