@@ -24,11 +24,9 @@ use super::contexts::SelectionContext;
 use super::overlays::{decoration_context, selection_context};
 use super::render_line::{render_view_lines, LastLineEnd, LineRenderInput, LineRenderOutput};
 use crate::app::types::{CellThemeInfo, ViewLineMapping};
-use crate::config::IndentationGuideMode;
 use crate::model::cursor::Cursors;
 use crate::primitives::ansi_background::AnsiBackground;
 use crate::state::{EditorState, ViewMode};
-use crate::view::bracket_highlight_overlay::BracketHighlightSettings;
 use crate::view::folding::FoldManager;
 use crate::view::theme::Theme;
 use crate::view::theme::ThemeStyle;
@@ -37,6 +35,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::Widget;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use crate::view::ui::RenderStyle;
 
 /// Output of the pure layout computation phase of buffer rendering.
 ///
@@ -189,29 +188,34 @@ pub(crate) fn compute_buffer_layout(
     folds: &FoldManager,
     area: Rect,
     is_active: bool,
-    theme: &Theme,
+    style: &RenderStyle<'_>,
     lsp_waiting: bool,
     view_mode: ViewMode,
     compose_width: Option<u16>,
-    estimated_line_length: usize,
-    highlight_context_bytes: usize,
-    relative_line_numbers: bool,
-    use_terminal_bg: bool,
     session_mode: bool,
-    software_cursor_only: bool,
     show_line_numbers: bool,
     highlight_current_line: bool,
     fold_indicators_visible: bool,
-    diagnostics_inline_text: bool,
     show_tilde: bool,
-    indentation_guide: IndentationGuideMode,
-    indentation_guide_glyph: &str,
-    rainbow_indentation: bool,
-    bracket_highlight: BracketHighlightSettings,
     cell_theme_map: Option<(&mut Vec<CellThemeInfo>, u16)>,
 ) -> BufferLayoutOutput {
     let _span = tracing::trace_span!("compute_buffer_layout").entered();
     crate::view::ui::split_rendering::instrument::count_buffer_layout();
+
+    let theme = style.theme;
+    let crate::view::ui::EditorRenderConfig {
+        estimated_line_length,
+        highlight_context_bytes,
+        relative_line_numbers,
+        use_terminal_bg,
+        software_cursor_only,
+        diagnostics_inline_text,
+        indentation_guide,
+        indentation_guide_glyph,
+        rainbow_indentation,
+        bracket_highlight,
+        ..
+    } = style.cfg;
 
     // Compute effective editor background: terminal default or theme-defined
     let effective_editor_bg = if use_terminal_bg {
