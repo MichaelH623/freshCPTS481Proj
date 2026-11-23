@@ -12,24 +12,58 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use std::ops::Range;
 
+/// The pane's render area together with the width of its gutter, which
+/// together locate where the text content starts.
+pub(super) struct ContentArea {
+    /// The pane's full render area, gutter included.
+    pub(super) rect: Rect,
+    /// Width of the gutter at the left of `rect`, in cells.
+    pub(super) gutter_width: usize,
+}
+
+impl ContentArea {
+    /// The screen x of the first content column, just right of the gutter.
+    fn content_x(&self) -> u16 {
+        self.rect.x + self.gutter_width as u16
+    }
+}
+
+/// An `AnsiBackground` together with the theme background it fades into and
+/// the fade amount, which are only ever used together.
+pub(super) struct BackgroundFade<'a> {
+    /// The background image to sample.
+    pub(super) background: &'a AnsiBackground,
+    /// The theme background the image is faded toward.
+    pub(super) theme_bg: Color,
+    /// How far the image is faded toward `theme_bg`.
+    pub(super) fade: f32,
+}
+
+impl BackgroundFade<'_> {
+    /// The faded background colour at sample position (`x`, `y`), if any.
+    fn faded_color(&self, x: usize, y: usize) -> Option<Color> {
+        self.background.faded_color(x, y, self.theme_bg, self.fade)
+    }
+}
+
 /// Render vertical column guide lines in the editor content area.
 /// Used for both config-based vertical rulers and compose-mode column guides.
 pub(super) fn render_column_guides(
     buf: &mut ratatui::buffer::Buffer,
     columns: &[u16],
     style: Style,
-    render_area: Rect,
-    gutter_width: usize,
+    content_area: &ContentArea,
     content_height: usize,
     left_column: usize,
 ) {
+    let render_area = content_area.rect;
     let guide_height = content_height.min(render_area.height as usize);
     for &col in columns {
         // Account for horizontal scroll
         let Some(scrolled_col) = (col as usize).checked_sub(left_column) else {
             continue;
         };
-        let guide_x = render_area.x + gutter_width as u16 + scrolled_col as u16;
+        let guide_x = content_area.content_x() + scrolled_col as u16;
         if guide_x < render_area.x + render_area.width {
             for row in 0..guide_height {
                 let cell = &mut buf[(guide_x, render_area.y + row as u16)];
@@ -190,10 +224,10 @@ pub(super) fn apply_hyperlink_overlays(
     buf: &mut ratatui::buffer::Buffer,
     viewport_overlays: &[(Overlay, Range<usize>)],
     view_line_mappings: &[ViewLineMapping],
-    render_area: Rect,
-    gutter_width: usize,
+    content_area: &ContentArea,
     cursor_screen_pos: Option<(u16, u16)>,
 ) {
+    let render_area = content_area.rect;
     let hyperlink_overlays: Vec<_> = viewport_overlays
         .iter()
         .filter(|(overlay, _)| overlay.url.is_some())
@@ -210,7 +244,7 @@ pub(super) fn apply_hyperlink_overlays(
         }
         for (overlay, range) in &hyperlink_overlays {
             let url = overlay.url.as_ref().unwrap();
-            for (start_x, end_x) in hyperlink_runs(mapping, range, render_area, gutter_width) {
+            for (start_x, end_x) in hyperlink_runs(mapping, range, content_area) {
                 apply_osc8_to_cells(buf, start_x, end_x, y, url, cursor_screen_pos);
             }
         }
@@ -222,17 +256,17 @@ pub(super) fn apply_hyperlink_overlays(
 ///
 /// Runs are returned in left-to-right order; a run still open at the end of
 /// the line is flushed with its end clamped to the right edge of
-/// `render_area`.
+/// `content_area.rect`.
 fn hyperlink_runs(
     mapping: &ViewLineMapping,
     range: &Range<usize>,
-    render_area: Rect,
-    gutter_width: usize,
+    content_area: &ContentArea,
 ) -> Vec<(u16, u16)> {
+    let render_area = content_area.rect;
     let mut runs = Vec::new();
     // Find screen columns in this row whose source byte falls in range
     let mut run_start: Option<u16> = None;
-    let content_x_offset = render_area.x + gutter_width as u16;
+    let content_x_offset = content_area.content_x();
     for (char_idx, maybe_byte) in mapping.char_source_bytes.iter().enumerate() {
         let in_range = maybe_byte
             .map(|b| b >= range.start && b < range.end)
@@ -284,17 +318,23 @@ pub(super) fn apply_osc8_to_cells(
         let chunk_size = if cursor_x == Some(x + 1) { 1 } else { 2 };
 
         let chunk_start = x;
-        let (chunk, next_x) = read_chunk(buf, chunk_start, y, chunk_size, end_x, max_x);
+        let (chunk, next_x) = read_chunk(buf, chunk_start, y, chunk_size, end_x);
         x = next_x;
         if !chunk.is_empty() {
             let actual_chunk_len = x - chunk_start;
-            write_osc8_chunk(buf, chunk_start, actual_chunk_len, y, url, &chunk);
+            write_osc8_chunk(
+                buf,
+                chunk_start..chunk_start + actual_chunk_len,
+                y,
+                url,
+                &chunk,
+            );
         }
     }
 }
 
 /// Read up to `chunk_size` cell symbols on row `y`, starting at column `x`
-/// and stopping early at `end_x` or `max_x` (both exclusive).
+/// and stopping early at `end_x` or the buffer's right edge (both exclusive).
 ///
 /// Returns the concatenated symbols and the column just past the last cell
 /// read.
@@ -304,8 +344,9 @@ fn read_chunk(
     y: u16,
     chunk_size: usize,
     end_x: u16,
-    max_x: u16,
 ) -> (String, u16) {
+    let area = buf.area();
+    let max_x = area.x + area.width;
     let mut chunk = String::new();
     for _ in 0..chunk_size {
         if x >= end_x || x >= max_x {
@@ -318,20 +359,19 @@ fn read_chunk(
     (chunk, x)
 }
 
-/// Write one OSC 8 hyperlink chunk: the escape-wrapped `chunk` goes in the
-/// cell at `chunk_start`, and the remaining `chunk_len - 1` cells it covers
+/// Write one OSC 8 hyperlink chunk over the columns `cells` on row `y`: the
+/// escape-wrapped `chunk` goes in the first cell, and the rest of `cells`
 /// are blanked.
 fn write_osc8_chunk(
     buf: &mut ratatui::buffer::Buffer,
-    chunk_start: u16,
-    chunk_len: u16,
+    cells: Range<u16>,
     y: u16,
     url: &str,
     chunk: &str,
 ) {
     let hyperlink = format!("\x1B]8;;{}\x07{}\x1B]8;;\x07", url, chunk);
-    buf[(chunk_start, y)].set_symbol(&hyperlink);
-    for cx in (chunk_start + 1)..chunk_start + chunk_len {
+    buf[(cells.start, y)].set_symbol(&hyperlink);
+    for cx in (cells.start + 1)..cells.end {
         buf[(cx, y)].set_symbol("");
     }
 }
@@ -340,17 +380,17 @@ fn write_osc8_chunk(
 ///
 /// Each cell's background is only replaced when the existing background is
 /// unset or `Color::Reset`, so syntax/selection backgrounds win.
-#[allow(clippy::too_many_arguments)]
+///
+/// `origin` is the `(x, y)` sample position of the first cell of the first
+/// line within the background.
 pub(super) fn apply_background_to_lines(
     lines: &mut Vec<Line<'static>>,
     area_width: u16,
-    background: &AnsiBackground,
-    theme_bg: Color,
+    background: &BackgroundFade<'_>,
     default_fg: Color,
-    fade: f32,
-    x_offset: usize,
-    y_offset: usize,
+    origin: (usize, usize),
 ) {
+    let (x_offset, y_offset) = origin;
     if area_width == 0 {
         return;
     }
@@ -371,7 +411,7 @@ pub(super) fn apply_background_to_lines(
                 (' ', Style::default().fg(default_fg))
             };
 
-            if let Some(bg_color) = background.faded_color(sample_x, sample_y, theme_bg, fade) {
+            if let Some(bg_color) = background.faded_color(sample_x, sample_y) {
                 style = fade_background(style, bg_color);
             }
 

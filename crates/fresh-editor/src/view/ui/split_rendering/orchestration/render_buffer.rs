@@ -16,7 +16,8 @@ use super::super::layout::{
     ComposeLayout,
 };
 use super::super::post_pass::{
-    apply_background_to_lines, render_column_guides, tint_columns_in_lines,
+    apply_background_to_lines, render_column_guides, tint_columns_in_lines, BackgroundFade,
+    ContentArea,
 };
 use super::super::view_data::build_view_data;
 use super::super::view_data::BuildAnchor;
@@ -631,12 +632,13 @@ pub(crate) fn draw_buffer_in_split(
         apply_background_to_lines(
             &mut lines,
             render_area.width,
-            bg,
-            effective_editor_bg,
+            &BackgroundFade {
+                background: bg,
+                theme_bg: effective_editor_bg,
+                fade: background_fade,
+            },
             theme.editor_fg,
-            background_fade,
-            background_x_offset,
-            starting_line_num,
+            (background_x_offset, starting_line_num),
         );
     }
 
@@ -721,8 +723,10 @@ pub(crate) fn draw_buffer_in_split(
             buf,
             &guides,
             guide_style,
-            render_area,
-            gutter_width,
+            &ContentArea {
+                rect: render_area,
+                gutter_width,
+            },
             layout_output.render_output.content_lines_rendered,
             0,
         );
