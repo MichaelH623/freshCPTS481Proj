@@ -183,6 +183,15 @@ pub(crate) struct PaneLayoutInputs {
     pub show_tilde: bool,
 }
 
+// helper method for compute_buffer_layout
+fn effective_editor_colors(theme: &Theme, use_terminal_bg: bool) -> (Color, Color) {
+    if use_terminal_bg {
+        (Color::Reset, Color::Reset)
+    } else {
+        (theme.editor_bg, theme.editor_fg)
+    }
+}
+
 /// Pure layout computation for a buffer in a split pane.
 /// No frame/drawing involved — produces a `BufferLayoutOutput` that the
 /// drawing phase can consume.
@@ -235,18 +244,9 @@ pub(crate) fn compute_buffer_layout(
     } = pane;
 
     // Compute effective editor background: terminal default or theme-defined
-    let effective_editor_bg = if use_terminal_bg {
-        Color::Reset
-    } else {
-        theme.editor_bg
-    };
     // Both halves follow the same rule: with the terminal's own background in
     // play, its foreground is what goes with it.
-    let effective_editor_fg = if use_terminal_bg {
-        Color::Reset
-    } else {
-        theme.editor_fg
-    };
+    let (effective_editor_bg, effective_editor_fg) = effective_editor_colors(theme, use_terminal_bg);
 
     let line_wrap = viewport.line_wrap_enabled;
 
